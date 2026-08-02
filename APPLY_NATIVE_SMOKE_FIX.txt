@@ -1,0 +1,15 @@
+FACEFORGE BDO 0.3.0 - NATIVE WEBVIEW2 SMOKE TEST FIX
+
+1. Extract this ZIP directly over your existing FaceForge BDO 0.3.0 - SOURCE folder.
+2. Allow Windows to merge folders and replace desktop_windows_test.go.
+3. Keep the existing .git folder.
+4. Double-click RETRY_NATIVE_RELEASE_FIX.bat.
+
+Root cause fixed:
+The old test loaded WebView2Loader.dll inside the main Go test process while the DLL lived
+inside t.TempDir(). Windows cannot delete a DLL until the process that loaded it exits, so
+Go's automatic TempDir cleanup failed with Access is denied even though the window test ran.
+
+The repaired test launches the native WebView2 window in a child test process. The parent
+waits for that process to exit, retries cleanup for briefly-held WebView2 profile files, and
+only then completes the test.
