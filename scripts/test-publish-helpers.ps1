@@ -29,6 +29,9 @@ try {
     if (Test-NativeCommandSucceeded { git rev-parse --verify 'refs/heads/definitely-missing' }) {
         throw 'Expected failing native command was reported as successful.'
     }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Expected lookup failure leaked LASTEXITCODE=$LASTEXITCODE."
+    }
 
     Write-Host 'GitHub publisher helper tests passed.' -ForegroundColor Green
 }
@@ -36,3 +39,7 @@ finally {
     Pop-Location
     if (Test-Path $temp) { Remove-Item $temp -Recurse -Force }
 }
+
+# Windows PowerShell can otherwise propagate a stale native exit code even after
+# every assertion passes. Keep the CI contract explicit.
+exit 0

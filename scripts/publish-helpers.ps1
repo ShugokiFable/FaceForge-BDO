@@ -23,15 +23,21 @@ function Test-NativeCommandSucceeded {
     # Windows PowerShell 5.1 converts native stderr into PowerShell error records.
     # Expected lookup failures must therefore run with a temporary non-terminating
     # preference, otherwise $ErrorActionPreference = 'Stop' aborts the publisher.
+    # Capture the result and then clear LASTEXITCODE. Leaving an expected failure in
+    # LASTEXITCODE makes powershell.exe report exit code 1 even when the script passed.
     $previousPreference = $ErrorActionPreference
+    $succeeded = $false
     try {
         $ErrorActionPreference = 'SilentlyContinue'
         & $Command *> $null
-        return $LASTEXITCODE -eq 0
+        $succeeded = $LASTEXITCODE -eq 0
     }
     finally {
         $ErrorActionPreference = $previousPreference
+        $global:LASTEXITCODE = 0
     }
+
+    return $succeeded
 }
 
 function Get-GitRemoteUrl {

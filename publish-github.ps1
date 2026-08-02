@@ -105,6 +105,7 @@ if ($CreateRelease) {
         }
         finally {
             $ErrorActionPreference = $previousPreference
+            $global:LASTEXITCODE = 0
         }
         if ($runListExitCode -eq 0 -and $runJson) {
             $runs = @($runJson | ConvertFrom-Json)
@@ -121,6 +122,16 @@ if ($CreateRelease) {
         Write-Host "Watching GitHub Actions run $runId..." -ForegroundColor Cyan
         & gh run watch $runId --repo $fullName --exit-status
         if ($LASTEXITCODE -ne 0) {
+            Write-Host 'Release workflow failed. Printing the failed job log:' -ForegroundColor Red
+            $previousPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'SilentlyContinue'
+                & gh run view $runId --repo $fullName --log-failed
+            }
+            finally {
+                $ErrorActionPreference = $previousPreference
+                $global:LASTEXITCODE = 0
+            }
             throw "GitHub Actions release build failed. Inspect: https://github.com/$fullName/actions/runs/$runId"
         }
 

@@ -5,6 +5,7 @@ import test from 'node:test';
 const publishScript = readFileSync(new URL('../publish-github.ps1', import.meta.url), 'utf8');
 const releaseWorkflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
 const helperURL = new URL('./publish-helpers.ps1', import.meta.url);
+const helperTestURL = new URL('./test-publish-helpers.ps1', import.meta.url);
 
 function readHelpers() {
   return readFileSync(helperURL, 'utf8');
@@ -23,9 +24,13 @@ test('publisher handles a missing origin without invoking a failing get-url prob
 
 test('publisher suppresses expected GitHub lookup failures without terminating PowerShell 5.1', () => {
   const helpers = readHelpers();
+  const helperTest = readFileSync(helperTestURL, 'utf8');
 
   assert.match(helpers, /function\s+Test-NativeCommandSucceeded/);
   assert.match(helpers, /\$ErrorActionPreference\s*=\s*'SilentlyContinue'/);
+  assert.match(helpers, /\$global:LASTEXITCODE\s*=\s*0/);
+  assert.match(helperTest, /leaked LASTEXITCODE/);
+  assert.match(helperTest, /exit\s+0\s*$/m);
   assert.match(publishScript, /Test-NativeCommandSucceeded\s+\{\s*gh\s+repo\s+view/);
   assert.match(publishScript, /Test-NativeCommandSucceeded\s+\{\s*gh\s+release\s+view/);
 });
@@ -51,4 +56,10 @@ test('release workflow supports manual dispatch with an explicit version and cre
   assert.match(releaseWorkflow, /release_meta/);
   assert.match(releaseWorkflow, /tag_name:\s*'\$\{\{\s*steps\.release_meta\.outputs\.tag\s*\}\}'/);
   assert.match(releaseWorkflow, /package\.ps1\s+-Version/);
+});
+
+
+test('publisher prints failed GitHub Actions logs before reporting failure', () => {
+  assert.match(publishScript, /gh\s+run\s+view\s+\$runId\s+--repo\s+\$fullName\s+--log-failed/);
+  assert.match(publishScript, /\$global:LASTEXITCODE\s*=\s*0/);
 });

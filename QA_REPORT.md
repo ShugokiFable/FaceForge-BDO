@@ -59,3 +59,12 @@ The release was built in a Linux verification environment, so the final Windows 
 - Verified publisher source no longer invokes `package.ps1` or checks for local Go when `-CreateRelease` is used.
 - Verified the release workflow accepts `workflow_dispatch` with an explicit version and creates the matching `v<version>` release.
 - Added regression coverage for cloud release dispatch and local-toolchain independence.
+
+## GitHub Actions exit-code regression
+
+- The failed release run was traced to an expected `git rev-parse` miss inside `Test-NativeCommandSucceeded`.
+- Every helper assertion passed, but Windows PowerShell retained native `$LASTEXITCODE = 1` and returned failure to GitHub Actions.
+- The helper now captures the command result and resets global `$LASTEXITCODE` before returning.
+- The Windows test asserts that the expected failure cannot leak a non-zero native exit code and explicitly exits with code 0.
+- Static publisher tests verify the reset, explicit successful exit, cloud-build delegation, and failed-log printing path.
+- Local verification after the repair: 16 JavaScript tests passed, all Go tests passed, and `go vet ./...` passed.
