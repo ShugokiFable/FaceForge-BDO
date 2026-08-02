@@ -181,9 +181,7 @@ if ($CreateRelease) {
             $global:LASTEXITCODE = 0
         }
         if ($runListExitCode -eq 0 -and $runJson) {
-            $runs = @($runJson | ConvertFrom-Json)
-            $match = $runs | Where-Object { $_.headSha -eq $headSha } | Sort-Object createdAt -Descending | Select-Object -First 1
-            if ($null -ne $match) { $runId = [string]$match.databaseId }
+            $runId = Get-NewestMatchingWorkflowRunId -Json ($runJson -join "`n") -HeadSha $headSha
         }
     }
 

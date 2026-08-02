@@ -101,3 +101,18 @@ test('publisher retries workflow dispatch after transient GitHub 404 responses',
   assert.match(publishScript, /for\s*\(\$attempt[^)]*\)[\s\S]*gh\s+workflow\s+run\s+release\.yml/);
   assert.match(publishScript, /if\s*\(-not\s+\$dispatchQueued\)/);
 });
+
+test('publisher chooses one newest workflow run id and never joins multiple ids', () => {
+  const helpers = readHelpers();
+  const attributes = readFileSync(new URL('../.gitattributes', import.meta.url), 'utf8');
+
+  assert.match(helpers, /function\s+Get-NewestMatchingWorkflowRunId/);
+  assert.match(helpers, /ConvertFrom-Json\s+-InputObject\s+\$Json/);
+  assert.match(helpers, /Sort-Object[\s\S]*createdAt[\s\S]*Descending/);
+  assert.match(helpers, /\$matchingRuns\[0\]\.databaseId/);
+  assert.match(publishScript, /Get-NewestMatchingWorkflowRunId\s+-Json\s+\(\$runJson\s+-join\s+"`n"\)\s+-HeadSha\s+\$headSha/);
+  assert.doesNotMatch(publishScript, /@\(\$runJson\s*\|\s*ConvertFrom-Json\)/);
+  assert.match(attributes, /^\*\.go\s+text\s+eol=lf$/m);
+  const helperTest = readFileSync(helperTestURL, 'utf8');
+  assert.ok(helperTest.indexOf('$workflowRuns') >= 0 && helperTest.indexOf('$workflowRuns') < helperTest.search(/^exit\s+0\s*$/m), 'PowerShell run-selector test must execute before exit 0');
+});

@@ -123,3 +123,44 @@ function Get-GitHubRepositorySlug {
 
     return $null
 }
+
+function Get-NewestMatchingWorkflowRunId {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Json,
+        [Parameter(Mandatory = $true)]
+        [string]$HeadSha
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Json) -or [string]::IsNullOrWhiteSpace($HeadSha)) {
+        return $null
+    }
+
+    try {
+        $parsedRuns = ConvertFrom-Json -InputObject $Json
+    }
+    catch {
+        throw "Could not parse the GitHub Actions run list: $($_.Exception.Message)"
+    }
+
+    # Do not wrap ConvertFrom-Json directly in @(...). Windows PowerShell 5.1 can
+    # preserve the returned JSON array as one nested object, causing property
+    # enumeration to join multiple database IDs into one invalid run ID.
+    $matchingRuns = @(
+        $parsedRuns |
+            Where-Object { [string]$_.headSha -eq $HeadSha } |
+            Sort-Object -Property @{ Expression = { [DateTimeOffset]$_.createdAt }; Descending = $true }
+    )
+
+    if ($matchingRuns.Count -eq 0) {
+        return $null
+    }
+
+    $runId = [string]$matchingRuns[0].databaseId
+    if ($runId -notmatch '^\d+$') {
+        throw "GitHub returned an invalid workflow run ID: '$runId'."
+    }
+
+    return $runId
+}
