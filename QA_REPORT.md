@@ -67,4 +67,12 @@ The release was built in a Linux verification environment, so the final Windows 
 - The helper now captures the command result and resets global `$LASTEXITCODE` before returning.
 - The Windows test asserts that the expected failure cannot leak a non-zero native exit code and explicitly exits with code 0.
 - Static publisher tests verify the reset, explicit successful exit, cloud-build delegation, and failed-log printing path.
-- Local verification after the repair: 16 JavaScript tests passed, all Go tests passed, and `go vet ./...` passed.
+- Local verification after the repair: 17 JavaScript tests passed, all Go tests passed, and `go vet ./...` passed.
+
+## Deleted remote repository recovery
+
+- Confirmed the reported `Repository not found` failure occurred because local `origin` still existed while `ShugokiFable/FaceForge-BDO` no longer existed remotely.
+- The publisher now checks `gh repo view` before every push, regardless of whether `origin` is present.
+- A missing remote is recreated as an empty public/private repository using the requested visibility.
+- Existing `origin` is canonicalized to `https://github.com/<owner>/<repository>.git`, then access is verified before push.
+- A regression test proves the repository-existence check runs before `git push` and that creation does not depend on `--source` or `--remote`.

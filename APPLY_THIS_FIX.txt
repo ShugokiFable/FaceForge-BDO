@@ -1,0 +1,9 @@
+FACEFORGE BDO 0.3.0 - MISSING REMOTE RECOVERY FIX
+
+1. Extract this ZIP directly over your existing FaceForge BDO 0.3.0 - SOURCE folder.
+2. Allow Windows to replace the included files.
+3. Do not delete the existing .git folder.
+4. Run PUSH_TO_GITHUB.bat again.
+
+The publisher will verify whether the GitHub repository exists. If it was deleted,
+it recreates it, repairs origin, pushes main, and then starts the release workflow.

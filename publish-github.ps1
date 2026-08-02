@@ -53,27 +53,51 @@ if ($changes) {
 }
 Invoke-Checked { git branch -M main } 'Could not rename the current branch to main.'
 
+$canonicalOrigin = "https://github.com/$fullName.git"
 $origin = Get-GitRemoteUrl -Name 'origin'
-if ([string]::IsNullOrWhiteSpace($origin)) {
-    if (Test-NativeCommandSucceeded { gh repo view $fullName }) {
-        Invoke-Checked { git remote add origin "https://github.com/$fullName.git" } "Could not connect the existing repository $fullName."
+
+# An origin entry only proves that the local repository remembers a URL. It does
+# not prove that the GitHub repository still exists. Always verify the remote
+# repository before attempting to push, and recreate an empty remote when it was
+# deleted between publish runs.
+if (-not [string]::IsNullOrWhiteSpace($origin)) {
+    $originSlug = Get-GitHubRepositorySlug -RemoteUrl $origin
+    if ([string]::IsNullOrWhiteSpace($originSlug)) {
+        throw "origin points to '$origin', which is not a supported GitHub repository URL. Expected $fullName."
     }
-    else {
-        $visibilitySwitch = if ($Visibility -eq 'Private') { '--private' } else { '--public' }
-        Invoke-Checked { gh repo create $fullName --source . --remote origin $visibilitySwitch } "Could not create $fullName."
+    if (-not $originSlug.Equals($fullName, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "origin points to '$originSlug', but this publish run expected '$fullName'. Change the repository name or correct the origin remote before retrying."
     }
-    $origin = Get-GitRemoteUrl -Name 'origin'
 }
 
+$repositoryExists = Test-NativeCommandSucceeded { gh repo view $fullName --json nameWithOwner }
+if (-not $repositoryExists) {
+    Write-Host "GitHub repository $fullName is missing. Recreating it before push..." -ForegroundColor Yellow
+    $visibilitySwitch = if ($Visibility -eq 'Private') { '--private' } else { '--public' }
+    Invoke-Checked {
+        gh repo create $fullName $visibilitySwitch
+    } "Could not create or access $fullName. Run 'gh auth refresh -h github.com -s repo,workflow' and retry."
+}
+
+if ([string]::IsNullOrWhiteSpace($origin)) {
+    Invoke-Checked { git remote add origin $canonicalOrigin } "Could not add origin for $fullName."
+}
+else {
+    # Canonicalize the URL even when the slug already matches. This removes stale
+    # redirects, trailing slashes, and renamed/deleted repository URLs.
+    Invoke-Checked { git remote set-url origin $canonicalOrigin } "Could not update origin for $fullName."
+}
+
+$origin = Get-GitRemoteUrl -Name 'origin'
 if ([string]::IsNullOrWhiteSpace($origin)) {
     throw 'GitHub repository setup completed without creating an origin remote.'
 }
 $originSlug = Get-GitHubRepositorySlug -RemoteUrl $origin
-if ([string]::IsNullOrWhiteSpace($originSlug)) {
-    throw "origin points to '$origin', which is not a supported GitHub repository URL. Expected $fullName."
+if ([string]::IsNullOrWhiteSpace($originSlug) -or -not $originSlug.Equals($fullName, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "origin verification failed after setup. Expected $canonicalOrigin but found '$origin'."
 }
-if (-not $originSlug.Equals($fullName, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "origin points to '$originSlug', but this publish run expected '$fullName'. Change the repository name or correct the origin remote before retrying."
+if (-not (Test-NativeCommandSucceeded { gh repo view $fullName --json nameWithOwner })) {
+    throw "Could not verify access to $fullName after repository setup. Run 'gh auth refresh -h github.com -s repo,workflow' and retry."
 }
 
 Invoke-Checked { git push --set-upstream origin main } 'Could not push main to GitHub.'

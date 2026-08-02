@@ -43,6 +43,23 @@ test('publisher refuses to push when origin targets a different GitHub repositor
   assert.match(publishScript, /expected/i);
 });
 
+
+test('publisher recreates a missing GitHub repository even when origin already exists', () => {
+  const repoCheck = /Test-NativeCommandSucceeded\s+\{\s*gh\s+repo\s+view\s+\$fullName[^}]*\}/s;
+  const createRemoteOnly = /gh\s+repo\s+create\s+\$fullName\s+\$visibilitySwitch(?![^\r\n]*--source)(?![^\r\n]*--remote)/;
+  const canonicalizeOrigin = /git\s+remote\s+set-url\s+origin\s+\$canonicalOrigin/;
+
+  assert.match(publishScript, repoCheck);
+  assert.match(publishScript, /repository.*missing|missing.*repository/i);
+  assert.match(publishScript, createRemoteOnly);
+  assert.match(publishScript, canonicalizeOrigin);
+  assert.match(publishScript, /Could not verify access to/i);
+
+  const repoCheckIndex = publishScript.search(repoCheck);
+  const pushIndex = publishScript.search(/git\s+push\s+--set-upstream\s+origin\s+main/);
+  assert.ok(repoCheckIndex >= 0 && repoCheckIndex < pushIndex, 'repository existence must be checked before push');
+});
+
 test('publisher delegates release builds to GitHub Actions instead of requiring local Go', () => {
   assert.match(publishScript, /gh\s+workflow\s+run\s+release\.yml/);
   assert.match(publishScript, /gh\s+run\s+watch/);

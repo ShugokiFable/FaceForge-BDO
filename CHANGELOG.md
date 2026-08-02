@@ -8,6 +8,7 @@
 - Added an explicit exit-code regression assertion and successful `exit 0` contract to the Windows helper test.
 - The publisher now prints failed GitHub Actions job logs automatically before reporting a release failure.
 - GitHub release publishing continues to use the Windows Actions runner, so local Go and Node.js are not required.
+- The publisher now verifies the GitHub repository itself on every run, recreates a deleted remote even when local `origin` still exists, canonicalizes the remote URL, and verifies access before push.
 
 ## 0.1.0 · 2026-08-02
 
