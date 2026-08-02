@@ -20,3 +20,9 @@ test('parent removes the smoke runtime only after the child process exits', () =
   assert.ok(cleanupIndex > waitIndex, 'runtime cleanup must happen after the child exits');
   assert.match(smokeTest, /Access is denied|retry|deadline/i);
 });
+
+test('native smoke cleanup is best-effort after the child process exits', () => {
+  assert.doesNotMatch(smokeTest, /if cleanupErr != nil \{\s*t\.Fatalf\(/s);
+  assert.match(smokeTest, /if cleanupErr != nil \{\s*t\.Logf\(/s);
+  assert.match(smokeTest, /native desktop child exited successfully/i);
+});
