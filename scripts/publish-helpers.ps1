@@ -40,6 +40,35 @@ function Test-NativeCommandSucceeded {
     return $succeeded
 }
 
+
+
+function Invoke-NativeCommandCapture {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$Command
+    )
+
+    $previousPreference = $ErrorActionPreference
+    $output = @()
+    $exitCode = 1
+    try {
+        $ErrorActionPreference = 'SilentlyContinue'
+        $output = @(& $Command 2>$null)
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+        $global:LASTEXITCODE = 0
+    }
+
+    return [pscustomobject]@{
+        Succeeded = ($exitCode -eq 0)
+        ExitCode  = $exitCode
+        Output    = ($output -join "`n").Trim()
+    }
+}
+
 function Get-GitRemoteUrl {
     [CmdletBinding()]
     param(

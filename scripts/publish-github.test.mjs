@@ -80,3 +80,24 @@ test('publisher prints failed GitHub Actions logs before reporting failure', () 
   assert.match(publishScript, /gh\s+run\s+view\s+\$runId\s+--repo\s+\$fullName\s+--log-failed/);
   assert.match(publishScript, /\$global:LASTEXITCODE\s*=\s*0/);
 });
+
+
+test('publisher waits for main and release workflow registration before dispatching', () => {
+  const pushIndex = publishScript.search(/git\s+push\s+--set-upstream\s+origin\s+main/);
+  const defaultBranchIndex = publishScript.search(/gh\s+repo\s+edit\s+\$fullName\s+--default-branch\s+main/);
+  const workflowReadyIndex = publishScript.search(/gh\s+workflow\s+view\s+release\.yml\s+--repo\s+\$fullName/);
+  const dispatchIndex = publishScript.search(/gh\s+workflow\s+run\s+release\.yml\s+--repo\s+\$fullName/);
+
+  assert.ok(pushIndex >= 0, 'main must be pushed');
+  assert.ok(defaultBranchIndex > pushIndex, 'main must be set as default after it exists remotely');
+  assert.ok(workflowReadyIndex > defaultBranchIndex, 'workflow registration must be checked after default branch setup');
+  assert.ok(dispatchIndex > workflowReadyIndex, 'workflow must not be dispatched before GitHub registers it');
+  assert.match(publishScript, /for\s*\(\$attempt[^)]*\)[\s\S]*gh\s+workflow\s+view\s+release\.yml/);
+  assert.match(publishScript, /Could not register|did not register|workflow.*visible/i);
+});
+
+test('publisher retries workflow dispatch after transient GitHub 404 responses', () => {
+  assert.match(publishScript, /\$dispatchQueued\s*=\s*\$false/);
+  assert.match(publishScript, /for\s*\(\$attempt[^)]*\)[\s\S]*gh\s+workflow\s+run\s+release\.yml/);
+  assert.match(publishScript, /if\s*\(-not\s+\$dispatchQueued\)/);
+});

@@ -33,6 +33,15 @@ try {
         throw "Expected lookup failure leaked LASTEXITCODE=$LASTEXITCODE."
     }
 
+    $captureSuccess = Invoke-NativeCommandCapture { git remote }
+    if (-not $captureSuccess.Succeeded) { throw 'Successful native capture was reported as failed.' }
+    if ($captureSuccess.ExitCode -ne 0) { throw "Unexpected successful capture exit code: $($captureSuccess.ExitCode)" }
+
+    $captureFailure = Invoke-NativeCommandCapture { git rev-parse --verify 'refs/heads/still-definitely-missing' }
+    if ($captureFailure.Succeeded) { throw 'Failing native capture was reported as successful.' }
+    if ($captureFailure.ExitCode -eq 0) { throw 'Failing native capture lost its original exit code.' }
+    if ($LASTEXITCODE -ne 0) { throw "Native capture leaked LASTEXITCODE=$LASTEXITCODE." }
+
     Write-Host 'GitHub publisher helper tests passed.' -ForegroundColor Green
 }
 finally {

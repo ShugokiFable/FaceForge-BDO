@@ -108,10 +108,59 @@ if ($CreateRelease) {
         throw 'The GitHub release workflow is missing: .github\workflows\release.yml'
     }
 
+    # A newly created repository can accept the first push before GitHub has made
+    # main the default branch or indexed workflow files. The workflow dispatch API
+    # resolves a workflow filename through the default branch, so dispatching
+    # immediately can return a misleading 404 even though release.yml was pushed.
+    $defaultBranchReady = $false
+    for ($attempt = 1; $attempt -le 15; $attempt++) {
+        $edited = Test-NativeCommandSucceeded { gh repo edit $fullName --default-branch main }
+        if ($edited) {
+            $branchResult = Invoke-NativeCommandCapture { gh repo view $fullName --json defaultBranchRef --jq .defaultBranchRef.name }
+            if ($branchResult.Succeeded -and $branchResult.Output -eq 'main') {
+                $defaultBranchReady = $true
+                break
+            }
+        }
+        if ($attempt -eq 1) {
+            Write-Host 'Waiting for GitHub to register main as the default branch...' -ForegroundColor Yellow
+        }
+        Start-Sleep -Seconds 2
+    }
+    if (-not $defaultBranchReady) {
+        throw "GitHub did not register main as the default branch for $fullName. Open the repository settings, confirm the default branch, then retry."
+    }
+
+    $workflowReady = $false
+    for ($attempt = 1; $attempt -le 30; $attempt++) {
+        if (Test-NativeCommandSucceeded { gh workflow view release.yml --repo $fullName }) {
+            $workflowReady = $true
+            break
+        }
+        if ($attempt -eq 1) {
+            Write-Host 'Waiting for GitHub Actions to index .github/workflows/release.yml...' -ForegroundColor Yellow
+        }
+        Start-Sleep -Seconds 2
+    }
+    if (-not $workflowReady) {
+        throw "The release workflow did not become visible on GitHub after 60 seconds. Verify .github/workflows/release.yml exists on main and Actions are enabled."
+    }
+
     Write-Host "Queueing GitHub Actions release build for FaceForge BDO $Version..." -ForegroundColor Cyan
-    Invoke-Checked {
-        gh workflow run release.yml --repo $fullName --ref main -f "version=$Version"
-    } 'Could not queue the GitHub Actions release workflow.'
+    $dispatchQueued = $false
+    for ($attempt = 1; $attempt -le 10; $attempt++) {
+        if (Test-NativeCommandSucceeded { gh workflow run release.yml --repo $fullName --ref main -f "version=$Version" }) {
+            $dispatchQueued = $true
+            break
+        }
+        if ($attempt -eq 1) {
+            Write-Host 'GitHub returned a transient workflow-dispatch error. Retrying...' -ForegroundColor Yellow
+        }
+        Start-Sleep -Seconds 2
+    }
+    if (-not $dispatchQueued) {
+        throw "Could not queue the GitHub Actions release workflow after 10 attempts. Inspect https://github.com/$fullName/actions/workflows/release.yml"
+    }
 
     $headSha = (& git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($headSha)) {
