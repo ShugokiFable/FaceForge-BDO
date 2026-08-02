@@ -1,0 +1,37 @@
+FACEFORGE BDO 0.3.0
+===================
+
+RUN THE APP
+-----------
+Double-click:
+  FaceForge BDO 0.3.0 - STANDALONE.exe
+
+The EXE opens a dedicated FaceForge BDO desktop window.
+It does not open your normal browser. Close the window or use Settings > Exit FaceForge BDO when finished.
+
+FIRST USE
+---------
+1. Open Preset Library and scan your Black Desert customization folder.
+2. Send two same-class presets to Base and Donor.
+3. Set each feature-region percentage in Preset Blender.
+4. Forge the preset.
+5. Download it or save it directly into the BDO folder.
+
+IMAGE GUIDANCE
+--------------
+For image-guided weights, provide:
+- the target face image,
+- a screenshot of the base preset face,
+- a screenshot of the donor preset face.
+
+All face analysis runs locally. FaceForge BDO compares visible proportions and suggests region weights. It does not claim to decrypt BDO slider values.
+
+BACKUPS
+-------
+Overwriting an existing preset creates a timestamped backup under:
+  .FaceForge BDO Backups
+
+BUILD OR PUBLISH
+----------------
+- BUILD_EXE.bat builds and tests the standalone EXE.
+- PUSH_TO_GITHUB.bat guides you through creating or updating the GitHub repository.

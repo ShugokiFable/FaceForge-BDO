@@ -1,0 +1,21 @@
+# Build output
+artifacts/
+dist/
+bin/
+*.exe
+*.zip
+*.sha256
+
+# Local QA output
+artifacts-ui*.png
+*.log
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local app state
+.faceforge-bdo/
+.FaceForge BDO Backups/

@@ -1,0 +1,88 @@
+{
+  "name": "BDO customization v20 starter map",
+  "version": 20,
+  "blockSize": 8,
+  "blockCount": 115,
+  "groups": [
+    {
+      "id": "metadata",
+      "name": "Metadata and ownership",
+      "description": "Preset metadata and creator-linked fields. Preserved from the base preset.",
+      "confidence": "protected",
+      "protected": true,
+      "ranges": [{"start": 0, "end": 8}]
+    },
+    {
+      "id": "class",
+      "name": "Class identity",
+      "description": "Confirmed class identity block at file bytes 76-83 (zero-based).",
+      "confidence": "confirmed",
+      "protected": true,
+      "ranges": [{"start": 9, "end": 9}]
+    },
+    {
+      "id": "face_type",
+      "name": "Face type",
+      "description": "Confirmed block immediately following class identity.",
+      "confidence": "high",
+      "protected": false,
+      "ranges": [{"start": 10, "end": 10}]
+    },
+    {
+      "id": "face_geometry",
+      "name": "Face geometry",
+      "description": "Starter region for facial morph data. Refine with the calibration wizard.",
+      "confidence": "experimental",
+      "protected": false,
+      "ranges": [{"start": 11, "end": 37}]
+    },
+    {
+      "id": "eyes_brows",
+      "name": "Eyes and brows",
+      "description": "Starter region for eye, iris, lash, line, and brow data.",
+      "confidence": "experimental",
+      "protected": false,
+      "ranges": [{"start": 38, "end": 60}]
+    },
+    {
+      "id": "makeup_detail",
+      "name": "Makeup and face detail",
+      "description": "Starter region for makeup, wrinkles, tattoo, and expression data.",
+      "confidence": "experimental",
+      "protected": false,
+      "ranges": [{"start": 61, "end": 70}]
+    },
+    {
+      "id": "hair",
+      "name": "Hair",
+      "description": "Starter region for hair type, shape, and colour data.",
+      "confidence": "experimental",
+      "protected": false,
+      "ranges": [{"start": 71, "end": 89}]
+    },
+    {
+      "id": "body",
+      "name": "Body",
+      "description": "Starter region for body shape, muscle, and body tattoo data.",
+      "confidence": "experimental",
+      "protected": false,
+      "ranges": [{"start": 90, "end": 99}]
+    },
+    {
+      "id": "skin_finish",
+      "name": "Skin and finish",
+      "description": "Starter region for skin colour, shine, and related finish data.",
+      "confidence": "experimental",
+      "protected": false,
+      "ranges": [{"start": 100, "end": 104}]
+    },
+    {
+      "id": "extended",
+      "name": "Extended and unknown",
+      "description": "Unresolved trailing fields kept visible for laboratory work.",
+      "confidence": "unknown",
+      "protected": false,
+      "ranges": [{"start": 105, "end": 114}]
+    }
+  ]
+}

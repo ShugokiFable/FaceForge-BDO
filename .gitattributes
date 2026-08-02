@@ -1,0 +1,4 @@
+* text=auto
+*.dll binary
+*.task binary
+*.wasm binary
