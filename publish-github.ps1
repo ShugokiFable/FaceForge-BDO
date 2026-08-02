@@ -79,24 +79,56 @@ if (-not $originSlug.Equals($fullName, [StringComparison]::OrdinalIgnoreCase)) {
 Invoke-Checked { git push --set-upstream origin main } 'Could not push main to GitHub.'
 
 if ($CreateRelease) {
-    & (Join-Path $PSScriptRoot 'package.ps1') -Version $Version
-    if ($LASTEXITCODE -ne 0) { throw 'Packaging failed.' }
+    $workflowPath = Join-Path $PSScriptRoot '.github\workflows\release.yml'
+    if (-not (Test-Path $workflowPath)) {
+        throw 'The GitHub release workflow is missing: .github\workflows\release.yml'
+    }
 
-    $releaseFiles = @(
-        Get-ChildItem (Join-Path $PSScriptRoot 'artifacts') -File |
-            Where-Object { $_.Extension -in @('.exe', '.zip') -or $_.Name -eq 'SHA256SUMS.txt' } |
-            Sort-Object Name |
-            ForEach-Object FullName
-    )
-    if ($releaseFiles.Count -eq 0) { throw 'No release artifacts were produced.' }
+    Write-Host "Queueing GitHub Actions release build for FaceForge BDO $Version..." -ForegroundColor Cyan
+    Invoke-Checked {
+        gh workflow run release.yml --repo $fullName --ref main -f "version=$Version"
+    } 'Could not queue the GitHub Actions release workflow.'
 
-    $tag = "v$Version"
-    if (Test-NativeCommandSucceeded { gh release view $tag }) {
-        Write-Host "Release $tag already exists. Uploading artifacts with overwrite..." -ForegroundColor Yellow
-        Invoke-Checked { gh release upload $tag @releaseFiles --clobber } 'Could not update release artifacts.'
+    $headSha = (& git rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($headSha)) {
+        throw 'Could not determine the commit SHA used for the release workflow.'
+    }
+
+    $runId = $null
+    for ($attempt = 0; $attempt -lt 20 -and [string]::IsNullOrWhiteSpace($runId); $attempt++) {
+        Start-Sleep -Seconds 2
+        $previousPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'SilentlyContinue'
+            $runJson = & gh run list --repo $fullName --workflow release.yml --event workflow_dispatch --branch main --limit 10 --json databaseId,headSha,createdAt,status 2>$null
+            $runListExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousPreference
+        }
+        if ($runListExitCode -eq 0 -and $runJson) {
+            $runs = @($runJson | ConvertFrom-Json)
+            $match = $runs | Where-Object { $_.headSha -eq $headSha } | Sort-Object createdAt -Descending | Select-Object -First 1
+            if ($null -ne $match) { $runId = [string]$match.databaseId }
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($runId)) {
+        Write-Host 'Release workflow was queued, but its run ID was not visible yet.' -ForegroundColor Yellow
+        Write-Host "Track it at: https://github.com/$fullName/actions/workflows/release.yml" -ForegroundColor Yellow
     }
     else {
-        Invoke-Checked { gh release create $tag @releaseFiles --title "FaceForge BDO $Version" --notes-file CHANGELOG.md } 'Could not create the GitHub release.'
+        Write-Host "Watching GitHub Actions run $runId..." -ForegroundColor Cyan
+        & gh run watch $runId --repo $fullName --exit-status
+        if ($LASTEXITCODE -ne 0) {
+            throw "GitHub Actions release build failed. Inspect: https://github.com/$fullName/actions/runs/$runId"
+        }
+
+        $tag = "v$Version"
+        if (-not (Test-NativeCommandSucceeded { gh release view $tag --repo $fullName })) {
+            throw "The release workflow completed, but release $tag was not found. Inspect: https://github.com/$fullName/actions/runs/$runId"
+        }
+        Write-Host "Release ready: https://github.com/$fullName/releases/tag/$tag" -ForegroundColor Green
     }
 }
 

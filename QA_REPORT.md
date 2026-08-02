@@ -53,3 +53,9 @@ The release was built in a Linux verification environment, so the final Windows 
 - Expected `gh repo view` and `gh release view` misses do not terminate Windows PowerShell 5.1.
 - Existing `origin` URLs are validated against the requested `owner/repository` before push.
 - `scripts/test-publish-helpers.ps1` exercises the no-origin path on Windows CI.
+
+## GitHub publishing fallback
+
+- Verified publisher source no longer invokes `package.ps1` or checks for local Go when `-CreateRelease` is used.
+- Verified the release workflow accepts `workflow_dispatch` with an explicit version and creates the matching `v<version>` release.
+- Added regression coverage for cloud release dispatch and local-toolchain independence.

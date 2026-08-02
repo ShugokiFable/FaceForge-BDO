@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version without the v prefix'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -22,6 +28,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20.x'
+      - name: Resolve release metadata
+        id: release_meta
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            $version = '${{ inputs.version }}'.Trim()
+          } else {
+            $version = '${{ github.ref_name }}'.TrimStart('v')
+          }
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw 'Release version is empty.'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
       - name: Test PowerShell publisher helpers
         shell: powershell
         run: ./scripts/test-publish-helpers.ps1
@@ -31,11 +51,12 @@ jobs:
         run: go test ./cmd/faceforge-bdo -run TestNativeDesktopWindowStartsAndStops -count=1 -v
       - name: Build and package release
         shell: pwsh
-        run: |
-          $version = '${{ github.ref_name }}'.TrimStart('v')
-          ./package.ps1 -Version $version
+        run: ./package.ps1 -Version '${{ steps.release_meta.outputs.version }}'
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: '${{ steps.release_meta.outputs.tag }}'
+          target_commitish: '${{ github.sha }}'
+          name: 'FaceForge BDO ${{ steps.release_meta.outputs.version }}'
           files: |
             artifacts/*.exe
             artifacts/*.zip

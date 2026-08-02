@@ -13,3 +13,9 @@ Initial standalone release.
 - Added customization folder discovery, scanning, direct save, atomic replacement, and timestamped backups.
 - Added a token-protected loopback desktop host with a fully embedded offline interface.
 - Added Windows standalone packaging, CI, release automation, and GitHub publishing scripts.
+
+### Publishing fix
+
+- `PUSH_TO_GITHUB.bat` no longer requires Go or Node.js to be installed locally when GitHub release creation is selected.
+- Release builds are dispatched to a Windows GitHub Actions runner, watched to completion, and verified before the publisher reports success.
+- Added manual `workflow_dispatch` release support with an explicit version input.

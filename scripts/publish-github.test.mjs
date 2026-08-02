@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const publishScript = readFileSync(new URL('../publish-github.ps1', import.meta.url), 'utf8');
+const releaseWorkflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
 const helperURL = new URL('./publish-helpers.ps1', import.meta.url);
 
 function readHelpers() {
@@ -20,7 +21,7 @@ test('publisher handles a missing origin without invoking a failing get-url prob
   assert.match(helpers, /git\s+remote\s+get-url\s+\$Name/);
 });
 
-test('publisher suppresses expected gh lookup failures without terminating PowerShell 5.1', () => {
+test('publisher suppresses expected GitHub lookup failures without terminating PowerShell 5.1', () => {
   const helpers = readHelpers();
 
   assert.match(helpers, /function\s+Test-NativeCommandSucceeded/);
@@ -35,4 +36,19 @@ test('publisher refuses to push when origin targets a different GitHub repositor
   assert.match(helpers, /function\s+Get-GitHubRepositorySlug/);
   assert.match(publishScript, /origin points to/i);
   assert.match(publishScript, /expected/i);
+});
+
+test('publisher delegates release builds to GitHub Actions instead of requiring local Go', () => {
+  assert.match(publishScript, /gh\s+workflow\s+run\s+release\.yml/);
+  assert.match(publishScript, /gh\s+run\s+watch/);
+  assert.doesNotMatch(publishScript, /package\.ps1/);
+  assert.doesNotMatch(publishScript, /Get-Command\s+go/i);
+});
+
+test('release workflow supports manual dispatch with an explicit version and creates the matching tag', () => {
+  assert.match(releaseWorkflow, /workflow_dispatch:/);
+  assert.match(releaseWorkflow, /version:/);
+  assert.match(releaseWorkflow, /release_meta/);
+  assert.match(releaseWorkflow, /tag_name:\s*'\$\{\{\s*steps\.release_meta\.outputs\.tag\s*\}\}'/);
+  assert.match(releaseWorkflow, /package\.ps1\s+-Version/);
 });

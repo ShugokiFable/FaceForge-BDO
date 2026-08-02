@@ -9,22 +9,28 @@ Double-click:
 The EXE opens a dedicated FaceForge BDO desktop window.
 It does not open your normal browser. Close the window or use Settings > Exit FaceForge BDO when finished.
 
-FIRST USE
----------
-1. Open Preset Library and scan your Black Desert customization folder.
-2. Send two same-class presets to Base and Donor.
-3. Set each feature-region percentage in Preset Blender.
-4. Forge the preset.
-5. Download it or save it directly into the BDO folder.
+NORMAL WORKFLOWS
+----------------
+1. Face from Photo
+   - Choose the target face image.
+   - Load a starting BDO preset.
+   - Optionally add a helper preset and screenshots for automatic suggestions.
+   - Continue to Merge Presets to generate and save the final file.
 
-IMAGE GUIDANCE
+2. Merge Presets
+   - Load the Starting preset.
+   - Load the Preset to borrow from.
+   - Pick a quick mix or adjust individual feature weights.
+   - Create, download, or save the merged preset.
+
+3. Preset Library
+   - Scan the BDO customization folder.
+   - Send files directly into either normal workflow.
+
+ADVANCED TOOLS
 --------------
-For image-guided weights, provide:
-- the target face image,
-- a screenshot of the base preset face,
-- a screenshot of the donor preset face.
-
-All face analysis runs locally. FaceForge BDO compares visible proportions and suggests region weights. It does not claim to decrypt BDO slider values.
+Preset Laboratory and Calibration are under Advanced Tools.
+They are optional reverse-engineering utilities and are not required for normal merging.
 
 BACKUPS
 -------
@@ -33,5 +39,7 @@ Overwriting an existing preset creates a timestamped backup under:
 
 BUILD OR PUBLISH
 ----------------
-- BUILD_EXE.bat builds and tests the standalone EXE.
-- PUSH_TO_GITHUB.bat guides you through creating or updating the GitHub repository.
+- BUILD_EXE.bat performs a local build and requires Go 1.22+ and Node.js 20+.
+- PUSH_TO_GITHUB.bat creates or updates the repository.
+- When release creation is selected, GitHub Actions builds the EXE on a Windows runner.
+  Go and Node.js do not need to be installed locally just to publish the release.

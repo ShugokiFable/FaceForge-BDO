@@ -78,35 +78,29 @@ The calibration workflow exists specifically to replace broad starter regions wi
 
 ## Run the release
 
-Download or build:
+Download the current standalone EXE from the GitHub release or the packaged release ZIP:
 
 ```text
-FaceForge BDO 0.1.0 - STANDALONE.exe
+FaceForge BDO 0.3.0 - STANDALONE.exe
 ```
 
-Double-click it. The EXE opens the interface in the system browser and keeps a token-protected service bound to `127.0.0.1` only. Use **Settings → Exit FaceForge BDO** when finished.
+Double-click it. The EXE opens a dedicated FaceForge BDO desktop window and keeps its private token-protected service bound to `127.0.0.1` only. Close the window or use **Settings → Exit FaceForge BDO** when finished.
 
 ## Build from source
 
-Requirements:
+Local build requirements:
 
 - Go 1.22 or newer
-- Node.js 20 or newer, used only for JavaScript tests
+- Node.js 20 or newer, used for JavaScript tests
 - PowerShell 7 or Windows PowerShell 5.1
 
 ```powershell
 .\build.ps1
 ```
 
-The output is written to `artifacts\FaceForge BDO 0.1.0 - STANDALONE.exe`.
+The output is written to `artifacts\FaceForge BDO 0.3.0 - STANDALONE.exe`.
 
-Run the full packaging pipeline:
-
-```powershell
-.\package.ps1
-```
-
-Or double-click `BUILD_EXE.bat`.
+Run the full local packaging pipeline with `package.ps1`, or double-click `BUILD_EXE.bat`.
 
 ## Push to GitHub
 
@@ -116,13 +110,15 @@ Install and authenticate the GitHub CLI, then double-click:
 PUSH_TO_GITHUB.bat
 ```
 
-The script can initialize the repository, commit tracked changes, create the remote repository, push `main`, and optionally create a version tag and GitHub release with the packaged artifacts.
+The publisher can initialize the repository, commit changes, create or connect the GitHub repository, and push `main`. When you choose **Build and create GitHub release**, the build runs on a Windows GitHub Actions runner. Go and Node.js are therefore not required on your PC merely to publish a release.
 
 For direct PowerShell use:
 
 ```powershell
 .\publish-github.ps1 -Repository FaceForge-BDO -Visibility Public -CreateRelease
 ```
+
+The publisher waits for the GitHub Actions run and reports the final release URL. `BUILD_EXE.bat` still requires the local Go and Node.js toolchains because it performs a local build.
 
 ## Source layout
 
