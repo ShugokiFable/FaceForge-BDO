@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { metricDistance, rankReferenceCandidates, buildAutomaticPlan } from './create-face.js';
+import { metricDistance, rankReferenceCandidates, buildAutomaticPlan, normalizeBlendResult, createBaseFallbackResult } from './create-face.js';
 
 const target = {
   faceAspect: 0.50,
@@ -57,4 +57,22 @@ test('buildAutomaticPlan can fall back to the starting preset when it is the onl
   assert.equal(plan.selected.length, 1);
   assert.equal(plan.selected[0].id, 'base-profile');
   assert.match(plan.warnings.join(' '), /starting preset is profiled right now/i);
+});
+
+
+test('normalizeBlendResult converts null collections into empty collections', () => {
+  const result = normalizeBlendResult({ changedBlocks: null, warnings: null, provenance: null });
+  assert.deepEqual(result.changedBlocks, []);
+  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(result.provenance, {});
+});
+
+
+test('createBaseFallbackResult returns an immediate zero-change result', () => {
+  const result = createBaseFallbackResult({ data: 'abc', sha256: 'deadbeef', warnings: ['only base'] });
+  assert.equal(result.data, 'abc');
+  assert.equal(result.sha256, 'deadbeef');
+  assert.deepEqual(result.changedBlocks, []);
+  assert.deepEqual(result.provenance, {});
+  assert.deepEqual(result.warnings, ['only base']);
 });

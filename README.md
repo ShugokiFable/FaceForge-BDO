@@ -83,7 +83,7 @@ The calibration workflow exists specifically to replace broad starter regions wi
 Download the current standalone EXE from the GitHub release or the packaged release ZIP:
 
 ```text
-FaceForge BDO 0.5.0 - STANDALONE.exe
+FaceForge BDO 0.5.1 - STANDALONE.exe
 ```
 
 Double-click it. The EXE opens a dedicated FaceForge BDO desktop window and keeps its private token-protected service bound to `127.0.0.1` only. Close the window or use **Settings → Exit FaceForge BDO** when finished.
@@ -100,7 +100,7 @@ Local build requirements:
 .\build.ps1
 ```
 
-The output is written to `artifacts\FaceForge BDO 0.5.0 - STANDALONE.exe`.
+The output is written to `artifacts\FaceForge BDO 0.5.1 - STANDALONE.exe`.
 
 Run the full local packaging pipeline with `package.ps1`, or double-click `BUILD_EXE.bat`.
 

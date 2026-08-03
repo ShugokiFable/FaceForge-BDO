@@ -3,6 +3,28 @@ import { clamp01, weightsFromProfiles } from './face-analysis.js';
 export const SUPPORTED_GROUPS = ['face_geometry', 'eyes_brows'];
 export const UNSUPPORTED_GROUPS = ['hair', 'body', 'makeup_detail', 'skin_finish', 'extended'];
 
+
+
+export function createBaseFallbackResult({ data, sha256, warnings = [] }) {
+  return {
+    data,
+    sha256,
+    changedBlocks: [],
+    provenance: {},
+    warnings: Array.isArray(warnings) ? warnings : [],
+    sidecar: ''
+  };
+}
+
+export function normalizeBlendResult(result = {}) {
+  return {
+    ...result,
+    changedBlocks: Array.isArray(result.changedBlocks) ? result.changedBlocks : [],
+    warnings: Array.isArray(result.warnings) ? result.warnings : [],
+    provenance: result.provenance && typeof result.provenance === 'object' ? result.provenance : {}
+  };
+}
+
 const GROUP_METRICS = {
   face_geometry: ['faceAspect', 'noseWidth', 'mouthWidth', 'jawWidth', 'lowerFace'],
   eyes_brows: ['eyeSpacing', 'eyeOpenness']

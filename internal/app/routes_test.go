@@ -76,7 +76,7 @@ func TestStatusReturnsVersionAndSchema(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["name"] != "FaceForge BDO" || payload["version"] != "0.5.0" {
+	if payload["name"] != "FaceForge BDO" || payload["version"] != "0.5.1" {
 		t.Fatalf("unexpected status payload: %+v", payload)
 	}
 }
@@ -141,6 +141,34 @@ func TestBlendEndpointReturnsValidPresetAndPreservesClass(t *testing.T) {
 	baseClass, _ := basePreset.Block(preset.ClassBlockIndex)
 	if generatedClass != baseClass {
 		t.Fatal("blend endpoint changed class identity")
+	}
+}
+
+func TestBlendEndpointSerializesNoChangesAsEmptyArray(t *testing.T) {
+	handler := NewHandler(Config{Token: "secret", Schema: appSchema(t), CustomizationDir: t.TempDir()})
+	data := base64.StdEncoding.EncodeToString(appFixture(t, "Cute Lahn"))
+	response := request(t, handler, http.MethodPost, "/api/blend", "secret", map[string]any{
+		"base": data,
+		"donors": map[string]string{
+			"base-profile": data,
+		},
+		"recipe": map[string]any{
+			"seed": "same-preset-test",
+			"groups": []map[string]any{
+				{"groupId": "face_geometry", "donorId": "base-profile", "weight": 100},
+				{"groupId": "eyes_brows", "donorId": "base-profile", "weight": 100},
+			},
+		},
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if string(payload["changedBlocks"]) != "[]" {
+		t.Fatalf("changedBlocks JSON = %s, want []", payload["changedBlocks"])
 	}
 }
 

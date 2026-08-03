@@ -1,6 +1,6 @@
 import { apiGet, apiPost, hasToken, setToken } from './api.js';
 import { analyzeFaceImage } from './face-analysis.js';
-import { buildAutomaticPlan } from './create-face.js';
+import { buildAutomaticPlan, normalizeBlendResult, createBaseFallbackResult } from './create-face.js';
 import {
   calibrationMerge,
   createInitialState,
@@ -232,7 +232,7 @@ function renderCreateFace() {
     ? `<div class="callout success">Automatic matching is ready. ${referenceInfo.baseProfile ? 'Your starting preset already has a linked screenshot, so FaceForge can use it as a fallback reference.' : ''} ${referenceInfo.extras > 0 ? `${referenceInfo.extras} additional profiled same-class preset${referenceInfo.extras === 1 ? '' : 's'} can also be borrowed automatically.` : ''}</div>`
     : `<div class="callout warning">This class still needs at least one screenshot-linked preset in Preset Library before automatic photo matching can do anything useful.</div>`;
   const processingPanel = flow.stage === 'processing'
-    ? `<div class="panel panel-flat"><div class="panel-body stack"><div class="summary-strip triple"><div class="summary-stat"><span>Current step</span><strong>${escapeHTML(flow.processingStep || 'Working…')}</strong></div><div class="summary-stat"><span>Elapsed</span><strong>${escapeHTML(formatDuration(Date.now() - Number(flow.startedAt || Date.now())))}</strong></div><div class="summary-stat"><span>Behavior</span><strong>Automatic</strong></div></div>${workflowSteps([{ title: 'Analyze target face', text: 'Profile the face from the target image.' }, { title: 'Pick references', text: 'Choose the closest profiled same-class presets from your local library.' }, { title: 'Build preset', text: 'Generate and validate a same-class BDO preset.' }])}<div class="inline"><button class="button danger" data-action="cancel-create-face">Cancel</button></div></div></div>`
+    ? `<div class="panel panel-flat"><div class="panel-body stack"><div class="summary-strip triple"><div class="summary-stat"><span>Current step</span><strong>${escapeHTML(flow.processingStep || 'Working…')}</strong></div><div class="summary-stat"><span>Safety timeout</span><strong>25 seconds</strong></div><div class="summary-stat"><span>Behavior</span><strong>Automatic</strong></div></div>${workflowSteps([{ title: 'Analyze target face', text: 'Profile the face from the target image.' }, { title: 'Pick references', text: 'Choose the closest profiled same-class presets from your local library.' }, { title: 'Build preset', text: 'Generate and validate a same-class BDO preset.' }])}<div class="inline"><button class="button danger" data-action="cancel-create-face">Cancel</button></div></div></div>`
     : '';
 
   return `<section class="view compact-view create-view">
@@ -368,7 +368,7 @@ function renderShell() {
   root.className = '';
   root.innerHTML = `<div class="app-shell">
     <header class="topbar"><div class="brand"><div class="brand-mark">FF</div><div class="brand-copy"><strong>FaceForge BDO</strong><span>Offline BDO preset workshop</span></div></div><div class="topbar-spacer"></div><div class="status-chip" title="${escapeHTML(state.settings.customizationDir)}"><span class="status-dot"></span>${escapeHTML(state.settings.customizationDir || 'Local service connected')}</div></header>
-    <aside class="sidebar"><div class="nav-label">Workspaces</div>${nav.map(([id, label, icon]) => `<button class="nav-button ${activeSidebarView() === id ? 'active' : ''}" data-nav="${id}"><span class="nav-icon">${icons[icon]}</span>${escapeHTML(label)}</button>`).join('')}<div class="sidebar-footer">Preset format v${state.status.presetVersion}<br>${state.status.groups?.length ?? 0} mapped regions<br>Photo workflow streamlined for 0.5.0</div></aside>
+    <aside class="sidebar"><div class="nav-label">Workspaces</div>${nav.map(([id, label, icon]) => `<button class="nav-button ${activeSidebarView() === id ? 'active' : ''}" data-nav="${id}"><span class="nav-icon">${icons[icon]}</span>${escapeHTML(label)}</button>`).join('')}<div class="sidebar-footer">Preset format v${state.status.presetVersion}<br>${state.status.groups?.length ?? 0} mapped regions<br>Photo workflow streamlined for 0.5.1</div></aside>
     <main class="main">${renderView()}</main>
   </div>`;
 }
@@ -610,19 +610,29 @@ async function createFacePreset() {
     state.createFace.processingStep = 'Loading selected reference presets...';
     renderShell();
     const selected = plan.selected.map((item, index) => ({ ...item, id: item.id || `ref${index + 1}` }));
-    const donors = await readCandidatePresets(selected);
-
-    state.createFace.processingStep = 'Building and validating the preset...';
-    renderShell();
-    const recipe = automaticRecipeFromPlan(plan);
-    const result = await apiPost('/api/blend', {
-      base: state.presets.base.data,
-      donors,
-      recipe
-    }, {
-      timeoutMs: 25000,
-      signal: controller.signal
-    });
+    const baseOnlyFallback = selected.length === 1 && selected[0].id === fallbackId;
+    let result;
+    if (baseOnlyFallback) {
+      result = createBaseFallbackResult({
+        data: state.presets.base.data,
+        sha256: state.presets.base.inspect.sha256,
+        warnings: plan.warnings
+      });
+    } else {
+      const donors = await readCandidatePresets(selected);
+      state.createFace.processingStep = 'Building and validating the preset...';
+      renderShell();
+      const recipe = automaticRecipeFromPlan(plan);
+      const rawResult = await apiPost('/api/blend', {
+        base: state.presets.base.data,
+        donors,
+        recipe
+      }, {
+        timeoutMs: 25000,
+        signal: controller.signal
+      });
+      result = normalizeBlendResult(rawResult);
+    }
 
     state.createFace.stage = 'result';
     state.createFace.result = result;
@@ -657,11 +667,12 @@ async function rebuildCreateFaceResult() {
     renderShell();
     const donors = await readCandidatePresets(state.createFace.candidates);
     const recipe = automaticRecipeFromPlan(plan);
-    const result = await apiPost('/api/blend', {
+    const rawResult = await apiPost('/api/blend', {
       base: state.presets.base.data,
       donors,
       recipe
     }, { timeoutMs: 25000 });
+    const result = normalizeBlendResult(rawResult);
     state.createFace.result = result;
     state.createFace.lastDurationMs = Date.now() - startedAt;
     state.createFace.stage = 'result';

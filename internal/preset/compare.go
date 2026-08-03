@@ -25,7 +25,7 @@ func Compare(a, b *Preset) (Comparison, error) {
 		return Comparison{}, fmt.Errorf("preset block counts differ: %d and %d", a.BlockCount(), b.BlockCount())
 	}
 
-	result := Comparison{Version: a.Version()}
+	result := Comparison{Version: a.Version(), ChangedBlocks: []int{}, SameBlocks: []int{}, Runs: []BlockRun{}}
 	for index := 0; index < a.BlockCount(); index++ {
 		left, _ := a.Block(index)
 		right, _ := b.Block(index)

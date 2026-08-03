@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1 · 2026-08-03
+
+- Fixed Create Face appearing permanently stuck after an immediate same-preset fallback result.
+- Root cause: zero-change blends serialized `changedBlocks` as JSON `null`; the result renderer expected an array and crashed before replacing the processing screen.
+- Zero-change comparisons now serialize empty collections as `[]`, and the frontend defensively normalizes older or malformed blend responses.
+- When the starting preset is the only profiled same-class reference, FaceForge now returns the honest zero-change fallback immediately instead of making an unnecessary blend request.
+- Replaced the misleading frozen elapsed-time display with an explicit 25-second safety timeout.
+- Fixed GitHub release verification for asset names containing spaces by parsing the full JSON response rather than line-oriented `--jq` output.
+
 ## 0.5.0 · 2026-08-02
 
 - Fixed the confusing Create Face dead-end where a starting preset with its own linked screenshot could still report that a reference screenshot was required. The starting preset can now act as an automatic fallback reference.
