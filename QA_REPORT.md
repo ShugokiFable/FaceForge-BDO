@@ -1,4 +1,4 @@
-# FaceForge BDO 0.4.0 QA Report
+# FaceForge BDO 0.5.0 QA Report
 
 ## Summary
 
@@ -10,7 +10,7 @@ This release restructures the main UX around a direct **Create Face** pipeline w
 - `node --test web/js/*.test.mjs`
 - JavaScript syntax parsing for `web/js/app.js`, `web/js/create-face.js`, and `web/js/state.js`
 
-## New 0.4.0 workflow coverage
+## New 0.5.0 workflow coverage
 
 - Create Face is now the default view after launch.
 - The normal path requires only:
@@ -26,7 +26,7 @@ This release restructures the main UX around a direct **Create Face** pipeline w
   - Adjust Result.
 - Library screenshot profiling is stored locally in browser storage and does not upload portraits anywhere.
 
-## New 0.4.0 unit coverage
+## New 0.5.0 unit coverage
 
 - Candidate distance scoring prefers closer references.
 - Automatic ranking orders the best profiled candidates first.

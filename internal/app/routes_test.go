@@ -76,7 +76,7 @@ func TestStatusReturnsVersionAndSchema(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["name"] != "FaceForge BDO" || payload["version"] != "0.4.0" {
+	if payload["name"] != "FaceForge BDO" || payload["version"] != "0.5.0" {
 		t.Fatalf("unexpected status payload: %+v", payload)
 	}
 }

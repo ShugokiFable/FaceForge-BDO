@@ -1,10 +1,10 @@
-FACEFORGE BDO 0.4.0
+FACEFORGE BDO 0.5.0
 ===================
 
 RUN THE APP
 -----------
 Double-click:
-  FaceForge BDO 0.4.0 - STANDALONE.exe
+  FaceForge BDO 0.5.0 - STANDALONE.exe
 
 The EXE opens a dedicated FaceForge BDO desktop window.
 It does not open your normal browser. Close the window or use Settings > Exit FaceForge BDO when finished.

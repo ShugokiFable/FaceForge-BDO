@@ -29,12 +29,15 @@ export function createInitialState(status = {}) {
     createFace: {
       stage: 'input',
       processingStep: '',
+      startedAt: null,
+      lastDurationMs: null,
       result: null,
       autoPlan: null,
       candidates: [],
       warnings: [],
       adjustmentsOpen: false,
-      referenceNeeded: null
+      referenceNeeded: null,
+      baseProfileFallback: false
     },
     library: { items: [], warnings: [], loading: false },
     referenceCatalog: loadReferenceCatalog(),

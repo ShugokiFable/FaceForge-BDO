@@ -54,7 +54,7 @@ function donorForGroup(ranked, groupId) {
   })[0] ?? null;
 }
 
-export function buildAutomaticPlan({ targetMetrics, baseMetrics = null, candidates = [] }) {
+export function buildAutomaticPlan({ targetMetrics, baseMetrics = null, candidates = [], baseCandidateId = null }) {
   if (!targetMetrics) throw new Error('A target face profile is required.');
   const ranked = rankReferenceCandidates(targetMetrics, candidates);
   if (ranked.length === 0) {
@@ -101,6 +101,12 @@ export function buildAutomaticPlan({ targetMetrics, baseMetrics = null, candidat
 
   if (!baseMetrics) {
     warnings.push('The starting preset has no screenshot profile, so FaceForge fully borrows the supported facial groups from the closest same-class references.');
+  }
+
+  if (selected.length === 1 && selected[0]?.id === baseCandidateId) {
+    warnings.push('Only your starting preset is profiled right now. FaceForge can still build a valid result, but it may stay very close to that preset until you profile more same-class presets in Preset Library.');
+  } else if (selected.length === 1) {
+    warnings.push('Only one compatible profiled reference was found, so the result is based on that single preset.');
   }
 
   for (const groupId of UNSUPPORTED_GROUPS) {

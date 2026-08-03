@@ -45,3 +45,16 @@ test('buildAutomaticPlan selects supported groups and leaves unsupported groups 
   assert.equal(plan.groups.hair.weight, 0);
   assert.match(plan.warnings.join(' '), /starting preset has no screenshot profile/i);
 });
+
+test('buildAutomaticPlan can fall back to the starting preset when it is the only profiled reference', () => {
+  const plan = buildAutomaticPlan({
+    targetMetrics: target,
+    baseMetrics: target,
+    baseCandidateId: 'base-profile',
+    candidates: [candidate('base-profile', 'Base', target)]
+  });
+
+  assert.equal(plan.selected.length, 1);
+  assert.equal(plan.selected[0].id, 'base-profile');
+  assert.match(plan.warnings.join(' '), /starting preset is profiled right now/i);
+});

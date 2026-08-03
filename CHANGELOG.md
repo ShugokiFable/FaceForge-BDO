@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 · 2026-08-02
+
+- Fixed the confusing Create Face dead-end where a starting preset with its own linked screenshot could still report that a reference screenshot was required. The starting preset can now act as an automatic fallback reference.
+- Simplified the Create Face screen into a clearer three-step workflow that is closer to the cleaner Skyrim edition layout.
+- Added clearer automatic-reference readiness status so you can immediately see whether the current class is ready for photo matching.
+- Added request timeouts and a Cancel action during Create Face builds, so the app no longer appears to hang forever at "Building and validating the preset...".
+- Added build-time feedback in the result panel and friendlier messaging when only one profiled same-class reference is available.
+- Reduced some UI bulk and tightened the desktop layout for easier 1440p use.
+- Added a regression test for the starting-preset fallback reference behavior.
+
 ## 0.4.0 · 2026-08-02
 
 - Replaced the old “Face from Photo → helper preset → go to Merge Presets” normal path with a direct **Create Face** workflow.
@@ -12,7 +22,7 @@
 - Moved **Merge Presets**, **Preset Laboratory**, and **Calibration** under **More Tools** so the normal workflow stays focused.
 - Reduced UI bulk and made the primary workflow fit typical 1440p desktop use better with fewer oversized cards and fewer forced scrolls.
 - Added automatic-recipe unit tests for ranking and supported/unsupported group behavior.
-- Bumped the app and package version to 0.4.0.
+- Bumped the app and package version to 0.5.0.
 
 ## 0.3.0 · 2026-08-02
 

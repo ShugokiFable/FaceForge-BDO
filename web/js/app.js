@@ -22,6 +22,7 @@ const root = document.querySelector('#app');
 let state;
 let selectedBlock = null;
 let toastCounter = 0;
+let createFaceAbortController = null;
 
 const nav = [
   ['create', 'Create Face', 'image'],
@@ -145,9 +146,43 @@ function outputFileName() {
 }
 
 function createDisabledReason() {
+  if (state.createFace.stage === 'processing') return 'FaceForge is already building a result.';
   if (!state.portraits.target?.analysis) return 'Add a target photo.';
   if (!state.presets.base) return 'Add a starting preset.';
   return '';
+}
+
+function formatDuration(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return '—';
+  if (durationMs < 1000) return `${Math.max(1, Math.round(durationMs))} ms`;
+  return `${(durationMs / 1000).toFixed(durationMs >= 10000 ? 0 : 1)} s`;
+}
+
+function sameClassProfileSummary() {
+  if (!state.presets.base?.inspect?.classFingerprint) {
+    return { total: 0, extras: 0, baseProfile: null, ready: false };
+  }
+  const baseClass = state.presets.base.inspect.classFingerprint;
+  const baseSha = String(state.presets.base.inspect.sha256 ?? '').toLowerCase();
+  const baseProfile = getProfileForPreset(state.presets.base);
+  let total = baseProfile ? 1 : 0;
+  let extras = 0;
+  for (const item of state.library.items) {
+    if (item.classFingerprint !== baseClass) continue;
+    const profile = getProfileForPreset(item);
+    if (!profile) continue;
+    const sha = String(item.sha256 ?? '').toLowerCase();
+    if (sha === baseSha) continue;
+    total += 1;
+    extras += 1;
+  }
+  return { total, extras, baseProfile, ready: total > 0 };
+}
+
+function renderCreateResultArea() {
+  if (state.createFace.stage === 'result') return createResultPanel();
+  if (state.createFace.stage === 'reference-required') return renderReferenceRequiredPanel();
+  return `<div class="panel"><div class="panel-header"><div><div class="panel-title">Result</div><div class="panel-subtitle">Your output appears here after Create Preset finishes.</div></div></div><div class="panel-body"><div class="empty-state">Load a target photo and a starting preset, then click <strong>Create Preset</strong>.</div></div></div>`;
 }
 
 function createResultPanel() {
@@ -157,9 +192,9 @@ function createResultPanel() {
   const plan = flow.autoPlan;
   const warnings = [...(result.warnings ?? []), ...(flow.warnings ?? [])];
   return `<div class="panel">
-    <div class="panel-header"><div><div class="panel-title">Generated result</div><div class="panel-subtitle">Validated version 20 preset · ${result.changedBlocks.length} blocks changed</div></div><div class="inline"><button class="button primary" data-action="save-create-result">Save to BDO</button><button class="button" data-action="download-create-result">Download Preset</button></div></div>
+    <div class="panel-header"><div><div class="panel-title">Result</div><div class="panel-subtitle">Validated version 20 preset · ${result.changedBlocks.length} blocks changed</div></div><div class="inline"><button class="button primary" data-action="save-create-result">Save to BDO</button><button class="button" data-action="download-create-result">Download Preset</button></div></div>
     <div class="panel-body stack">
-      <div class="summary-strip triple"><div class="summary-stat"><span>Confidence</span><strong>${escapeHTML(plan?.summary ?? 'Unknown')}</strong></div><div class="summary-stat"><span>References used</span><strong>${flow.candidates.length}</strong></div><div class="summary-stat"><span>Changed groups</span><strong>${Object.entries(plan?.groups ?? {}).filter(([, group]) => Number(group.weight) > 0).length}</strong></div></div>
+      <div class="summary-strip four-fit"><div class="summary-stat"><span>Confidence</span><strong>${escapeHTML(plan?.summary ?? 'Unknown')}</strong></div><div class="summary-stat"><span>References used</span><strong>${flow.candidates.length}</strong></div><div class="summary-stat"><span>Changed groups</span><strong>${Object.entries(plan?.groups ?? {}).filter(([, group]) => Number(group.weight) > 0).length}</strong></div><div class="summary-stat"><span>Build time</span><strong>${escapeHTML(formatDuration(flow.lastDurationMs))}</strong></div></div>
       ${warnings.length ? warnings.map((warning) => `<div class="callout warning">${escapeHTML(warning)}</div>`).join('') : '<div class="callout success">Same-class automatic blending completed and the result passed binary validation.</div>'}
       <div class="panel panel-flat"><div class="panel-header"><div><div class="panel-title">References selected</div><div class="panel-subtitle">Closest profiled presets from your local library</div></div></div><div class="panel-body"><div class="data-list compact-list">${flow.candidates.map((candidate, index) => `<div class="data-row"><div class="data-main"><strong>${index + 1}. ${escapeHTML(candidate.name)}</strong><span>${shortHash(candidate.sha256)} · overall distance ${candidate.overallDistance.toFixed(3)}</span></div></div>`).join('')}</div></div></div>
       <div class="inline"><button class="button" data-action="toggle-adjustments">${flow.adjustmentsOpen ? 'Hide Adjust Result' : 'Adjust Result'}</button><button class="button ghost" data-action="start-over-create">Start over</button></div>
@@ -179,26 +214,53 @@ function renderAdjustmentsPanel() {
 
 function renderReferenceRequiredPanel() {
   const reason = state.createFace.referenceNeeded ?? 'FaceForge needs at least one screenshot-linked preset for this class before it can match a photo honestly.';
-  return `<div class="panel"><div class="panel-header"><div><div class="panel-title">Reference screenshot needed</div><div class="panel-subtitle">One quick setup step unlocks automatic photo matching for this class</div></div></div><div class="panel-body stack"><div class="callout warning">${escapeHTML(reason)}</div><div class="inline"><button class="button primary" data-action="open-library-profile-help">Open Preset Library</button><button class="button" data-nav="merge">Use Manual Merge</button></div></div></div>`;
+  return `<div class="panel"><div class="panel-header"><div><div class="panel-title">Reference screenshot needed</div><div class="panel-subtitle">Create Face uses your local profiled preset library as its matching brain.</div></div></div><div class="panel-body stack"><div class="callout warning">${escapeHTML(reason)}</div><div class="inline"><button class="button primary" data-action="open-library-profile-help">Open Preset Library</button><button class="button" data-nav="merge">Use Manual Merge</button></div></div></div>`;
 }
 
 function renderCreateFace() {
   const disabledReason = createDisabledReason();
-  return `<section class="view compact-view">
-    ${viewHeader('Create Face', 'Choose a target face photo and a starting preset, then let FaceForge generate a same-class result from your profiled local library.', '')}
-    ${compactProgress(state.createFace.stage)}
+  const flow = state.createFace;
+  const referenceInfo = sameClassProfileSummary();
+  const readyText = !state.portraits.target?.analysis
+    ? 'Waiting for a target photo.'
+    : !state.presets.base
+      ? 'Waiting for a starting preset.'
+      : referenceInfo.ready
+        ? `${referenceInfo.total} same-class profiled reference${referenceInfo.total === 1 ? '' : 's'} available automatically.`
+        : 'No profiled same-class reference is available yet.';
+  const referenceCallout = referenceInfo.ready
+    ? `<div class="callout success">Automatic matching is ready. ${referenceInfo.baseProfile ? 'Your starting preset already has a linked screenshot, so FaceForge can use it as a fallback reference.' : ''} ${referenceInfo.extras > 0 ? `${referenceInfo.extras} additional profiled same-class preset${referenceInfo.extras === 1 ? '' : 's'} can also be borrowed automatically.` : ''}</div>`
+    : `<div class="callout warning">This class still needs at least one screenshot-linked preset in Preset Library before automatic photo matching can do anything useful.</div>`;
+  const processingPanel = flow.stage === 'processing'
+    ? `<div class="panel panel-flat"><div class="panel-body stack"><div class="summary-strip triple"><div class="summary-stat"><span>Current step</span><strong>${escapeHTML(flow.processingStep || 'Working…')}</strong></div><div class="summary-stat"><span>Elapsed</span><strong>${escapeHTML(formatDuration(Date.now() - Number(flow.startedAt || Date.now())))}</strong></div><div class="summary-stat"><span>Behavior</span><strong>Automatic</strong></div></div>${workflowSteps([{ title: 'Analyze target face', text: 'Profile the face from the target image.' }, { title: 'Pick references', text: 'Choose the closest profiled same-class presets from your local library.' }, { title: 'Build preset', text: 'Generate and validate a same-class BDO preset.' }])}<div class="inline"><button class="button danger" data-action="cancel-create-face">Cancel</button></div></div></div>`
+    : '';
+
+  return `<section class="view compact-view create-view">
+    ${viewHeader('Create Face', 'Simple path: add a photo, choose a starting preset, click Create Preset, then save the result into Black Desert.', '')}
+    ${compactProgress(flow.stage)}
     <div class="spacer"></div>
-    <div class="callout">Normal path: <strong>photo + starting preset → Create Face Preset → Save to BDO</strong>. Manual preset mixing still lives under <strong>More Tools</strong>.</div>
+    <div class="callout">Fast path: <strong>photo → starting preset → Create Preset → Save to BDO</strong>. Manual preset mixing is still available under <strong>More Tools</strong>.</div>
     <div class="spacer"></div>
-    <div class="grid compact-create-grid">
-      ${portraitPanel('target', 'Target photo', 'The real or fictional face you want to approximate.', true)}
-      ${presetCard('base', 'Starting preset', 'Required. The class identity and protected metadata stay from this file.')}
+    <div class="grid compact-create-grid compact-create-grid-3">
+      ${portraitPanel('target', '1 · Target photo', 'Front-facing, neutral, full face visible.', true)}
+      ${presetCard('base', '2 · Starting preset', 'Same-class result base. Protected metadata stays from this file.')}
+      <div class="panel action-panel">
+        <div class="panel-header"><div><div class="panel-title">3 · Create preset</div><div class="panel-subtitle">Automatic matching uses your profiled local library.</div></div></div>
+        <div class="panel-body stack">
+          <div class="data-list compact-list">
+            <div class="data-row"><div class="data-main"><strong>Photo</strong><span>${state.portraits.target?.analysis ? 'Ready' : 'Missing'}</span></div></div>
+            <div class="data-row"><div class="data-main"><strong>Starting preset</strong><span>${state.presets.base ? 'Ready' : 'Missing'}</span></div></div>
+            <div class="data-row"><div class="data-main"><strong>Automatic references</strong><span>${escapeHTML(readyText)}</span></div></div>
+          </div>
+          ${referenceCallout}
+          <div class="inline"><button class="button primary large-action" data-action="create-face" ${disabledReason ? 'disabled' : ''}>Create Preset</button><button class="button" data-action="open-library-profile-help">Preset Library</button><button class="button" data-nav="merge">Manual Merge</button></div>
+          ${disabledReason ? `<div class="help warning-text">${escapeHTML(disabledReason)}</div>` : '<div class="help">Output appears immediately on the right. Save to BDO when it looks good.</div>'}
+        </div>
+      </div>
     </div>
+    ${processingPanel ? `<div class="spacer"></div>${processingPanel}` : ''}
     <div class="spacer"></div>
-    <div class="panel"><div class="panel-body inline grow-between"><div class="stack compact-gap"><strong>Create a result</strong><span class="help">Only the target photo and starting preset are required.</span>${disabledReason ? `<span class="help warning-text">${escapeHTML(disabledReason)}</span>` : ''}</div><button class="button primary large-action" data-action="create-face" ${disabledReason ? 'disabled' : ''}>Create Face Preset</button></div></div>
-    ${state.createFace.stage === 'processing' ? `<div class="spacer"></div><div class="panel"><div class="panel-body">${workflowSteps([{ title: 'Analyze target face', text: 'Profile facial proportions from the target photo.' }, { title: 'Scan compatible references', text: 'Search your same-class profiled local presets.' }, { title: 'Choose reference blend', text: 'Pick the best per-group references.' }, { title: 'Build and validate preset', text: 'Generate a valid version 20 BDO preset.' }])}<div class="spacer"></div><div class="callout">${escapeHTML(state.createFace.processingStep || 'Working...')}</div></div></div>` : ''}
-    ${state.createFace.stage === 'reference-required' ? `<div class="spacer"></div>${renderReferenceRequiredPanel()}` : ''}
-    ${state.createFace.stage === 'result' ? `<div class="spacer"></div>${createResultPanel()}` : ''}
+    ${renderCreateResultArea()}
   </section>`;
 }
 
@@ -306,7 +368,7 @@ function renderShell() {
   root.className = '';
   root.innerHTML = `<div class="app-shell">
     <header class="topbar"><div class="brand"><div class="brand-mark">FF</div><div class="brand-copy"><strong>FaceForge BDO</strong><span>Offline BDO preset workshop</span></div></div><div class="topbar-spacer"></div><div class="status-chip" title="${escapeHTML(state.settings.customizationDir)}"><span class="status-dot"></span>${escapeHTML(state.settings.customizationDir || 'Local service connected')}</div></header>
-    <aside class="sidebar"><div class="nav-label">Workspaces</div>${nav.map(([id, label, icon]) => `<button class="nav-button ${activeSidebarView() === id ? 'active' : ''}" data-nav="${id}"><span class="nav-icon">${icons[icon]}</span>${escapeHTML(label)}</button>`).join('')}<div class="sidebar-footer">Preset format v${state.status.presetVersion}<br>${state.status.groups?.length ?? 0} mapped regions<br>Photo workflow streamlined for 0.4.0</div></aside>
+    <aside class="sidebar"><div class="nav-label">Workspaces</div>${nav.map(([id, label, icon]) => `<button class="nav-button ${activeSidebarView() === id ? 'active' : ''}" data-nav="${id}"><span class="nav-icon">${icons[icon]}</span>${escapeHTML(label)}</button>`).join('')}<div class="sidebar-footer">Preset format v${state.status.presetVersion}<br>${state.status.groups?.length ?? 0} mapped regions<br>Photo workflow streamlined for 0.5.0</div></aside>
     <main class="main">${renderView()}</main>
   </div>`;
 }
@@ -315,13 +377,20 @@ function resetCreateFaceFlow(preserveInputs = true) {
   state.createFace = {
     stage: 'input',
     processingStep: '',
+    startedAt: null,
+    lastDurationMs: null,
     result: null,
     autoPlan: null,
     candidates: [],
     warnings: [],
     adjustmentsOpen: false,
-    referenceNeeded: null
+    referenceNeeded: null,
+    baseProfileFallback: false
   };
+  if (createFaceAbortController) {
+    try { createFaceAbortController.abort(); } catch { /* ignore */ }
+  }
+  createFaceAbortController = null;
   if (!preserveInputs) {
     if (state.portraits.target?.preview) URL.revokeObjectURL(state.portraits.target.preview);
     state.portraits.target = null;
@@ -455,8 +524,17 @@ function automaticRecipeFromPlan(plan) {
 
 async function readCandidatePresets(candidates) {
   const donors = {};
+  const baseSha = String(state.presets.base?.inspect?.sha256 ?? '').toLowerCase();
   for (const candidate of candidates) {
-    const loaded = await apiPost('/api/folder/read', { path: candidate.path });
+    const candidateSha = String(candidate.sha256 ?? '').toLowerCase();
+    if (candidate.useLoadedBase || (state.presets.base?.data && candidateSha && candidateSha === baseSha)) {
+      donors[candidate.id] = state.presets.base.data;
+      continue;
+    }
+    if (!candidate.path) {
+      throw new Error(`Could not locate the preset file for ${candidate.name}. Rescan the library or choose the preset again.`);
+    }
+    const loaded = await apiPost('/api/folder/read', { path: candidate.path }, { timeoutMs: 15000 });
     donors[candidate.id] = loaded.data;
   }
   return donors;
@@ -464,8 +542,13 @@ async function readCandidatePresets(candidates) {
 
 async function createFacePreset() {
   if (!state.portraits.target?.analysis || !state.presets.base) return;
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  createFaceAbortController = controller;
   try {
     state.createFace.stage = 'processing';
+    state.createFace.startedAt = startedAt;
+    state.createFace.lastDurationMs = null;
     state.createFace.processingStep = 'Analyzing target face...';
     renderShell();
 
@@ -476,6 +559,7 @@ async function createFacePreset() {
     state.createFace.processingStep = 'Scanning compatible profiled references...';
     renderShell();
 
+    const baseProfile = getProfileForPreset(state.presets.base);
     const candidates = state.library.items
       .filter((item) => item.classFingerprint === baseClass && item.sha256.toLowerCase() !== baseSha)
       .map((item) => ({ ...item, ...(getProfileForPreset(item) ? { analysis: { measurements: { normalized: getProfileForPreset(item).metrics, quality: getProfileForPreset(item).quality } } } : {}) }))
@@ -490,8 +574,26 @@ async function createFacePreset() {
         metrics: item.analysis.measurements.normalized
       }));
 
-    const baseProfile = getProfileForPreset(state.presets.base);
-    const plan = buildAutomaticPlan({ targetMetrics, baseMetrics: baseProfile?.metrics ?? null, candidates });
+    const fallbackId = 'base-profile';
+    if (baseProfile?.metrics) {
+      candidates.unshift({
+        id: fallbackId,
+        path: state.presets.base.path ?? '',
+        name: `${state.presets.base.name} (starting preset)`,
+        sha256: state.presets.base.inspect.sha256,
+        classFingerprint: baseClass,
+        useLoadedBase: true,
+        analysis: { measurements: { normalized: baseProfile.metrics, quality: baseProfile.quality } },
+        metrics: baseProfile.metrics
+      });
+    }
+
+    const plan = buildAutomaticPlan({
+      targetMetrics,
+      baseMetrics: baseProfile?.metrics ?? null,
+      candidates,
+      baseCandidateId: fallbackId
+    });
 
     if (!plan.selected.length) {
       state.createFace.stage = 'reference-required';
@@ -500,6 +602,7 @@ async function createFacePreset() {
       state.createFace.result = null;
       state.createFace.candidates = [];
       state.createFace.warnings = plan.warnings;
+      state.createFace.baseProfileFallback = false;
       renderShell();
       return;
     }
@@ -516,6 +619,9 @@ async function createFacePreset() {
       base: state.presets.base.data,
       donors,
       recipe
+    }, {
+      timeoutMs: 25000,
+      signal: controller.signal
     });
 
     state.createFace.stage = 'result';
@@ -523,13 +629,19 @@ async function createFacePreset() {
     state.createFace.autoPlan = plan;
     state.createFace.candidates = selected;
     state.createFace.warnings = plan.warnings;
+    state.createFace.baseProfileFallback = selected.some((item) => item.id === fallbackId);
+    state.createFace.lastDurationMs = Date.now() - startedAt;
     state.presets.generated = { name: outputFileName(), data: result.data };
     state.settings.outputFilename = outputFileName();
-    addActivity(`Created ${outputFileName()} from photo workflow.`);
-    toast('Face preset created and binary-validated.', 'success');
+    addActivity(`Created ${outputFileName()} from photo workflow in ${formatDuration(state.createFace.lastDurationMs)}.`);
+    toast(`Face preset created in ${formatDuration(state.createFace.lastDurationMs)}.`, 'success');
   } catch (error) {
     state.createFace.stage = 'input';
-    toast(error.message, 'error');
+    state.createFace.lastDurationMs = Date.now() - startedAt;
+    if (controller.signal.aborted) toast('Create Face was canceled.', 'error');
+    else toast(error.message, 'error');
+  } finally {
+    if (createFaceAbortController === controller) createFaceAbortController = null;
   }
   renderShell();
 }
@@ -537,8 +649,10 @@ async function createFacePreset() {
 async function rebuildCreateFaceResult() {
   const plan = state.createFace.autoPlan;
   if (!plan || !state.presets.base) return;
+  const startedAt = Date.now();
   try {
     state.createFace.stage = 'processing';
+    state.createFace.startedAt = startedAt;
     state.createFace.processingStep = 'Rebuilding the result with your adjustments...';
     renderShell();
     const donors = await readCandidatePresets(state.createFace.candidates);
@@ -547,12 +661,13 @@ async function rebuildCreateFaceResult() {
       base: state.presets.base.data,
       donors,
       recipe
-    });
+    }, { timeoutMs: 25000 });
     state.createFace.result = result;
+    state.createFace.lastDurationMs = Date.now() - startedAt;
     state.createFace.stage = 'result';
     state.presets.generated = { name: outputFileName(), data: result.data };
-    addActivity(`Rebuilt ${outputFileName()} after adjustments.`);
-    toast('Adjusted result rebuilt and validated.', 'success');
+    addActivity(`Rebuilt ${outputFileName()} after adjustments in ${formatDuration(state.createFace.lastDurationMs)}.`);
+    toast(`Adjusted result rebuilt in ${formatDuration(state.createFace.lastDurationMs)}.`, 'success');
   } catch (error) {
     state.createFace.stage = 'result';
     toast(error.message, 'error');
@@ -561,6 +676,7 @@ async function rebuildCreateFaceResult() {
 }
 
 async function generateBlend() {
+
   if (!state.presets.base || !state.presets.donor) return;
   try {
     const recipe = recipeFromState(state, state.status.groups);
@@ -641,6 +757,12 @@ async function handleAction(action) {
       break;
     case 'rebuild-create-result':
       await rebuildCreateFaceResult();
+      break;
+    case 'cancel-create-face':
+      if (createFaceAbortController) createFaceAbortController.abort();
+      state.createFace.stage = 'input';
+      state.createFace.processingStep = '';
+      renderShell();
       break;
     case 'toggle-adjustments':
       state.createFace.adjustmentsOpen = !state.createFace.adjustmentsOpen;
