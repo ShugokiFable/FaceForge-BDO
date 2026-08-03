@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0 · 2026-08-02
+
+- Replaced the old “Face from Photo → helper preset → go to Merge Presets” normal path with a direct **Create Face** workflow.
+- Create Face now generates the result on the same screen and exposes **Save to BDO**, **Download Preset**, and **Adjust Result** immediately after generation.
+- Added a local **reference screenshot profile catalog** in the Preset Library. You can now attach one screenshot to a preset and reuse that analyzed profile later for photo matching.
+- Automatic photo matching now searches the scanned preset library for compatible **same-class** profiled references and selects the closest candidates per supported feature group.
+- Starting presets no longer require their own screenshot profile. If one is missing, FaceForge falls back honestly and borrows supported facial groups from the closest profiled same-class references.
+- Unsupported groups remain at 0% in the automatic workflow until the user changes them in **Adjust Result**.
+- Simplified navigation to four main areas: **Create Face**, **Preset Library**, **More Tools**, and **Settings**.
+- Moved **Merge Presets**, **Preset Laboratory**, and **Calibration** under **More Tools** so the normal workflow stays focused.
+- Reduced UI bulk and made the primary workflow fit typical 1440p desktop use better with fewer oversized cards and fewer forced scrolls.
+- Added automatic-recipe unit tests for ranking and supported/unsupported group behavior.
+- Bumped the app and package version to 0.4.0.
+
 ## 0.3.0 · 2026-08-02
 
 - Separated Face from Photo and Merge Presets into clear user-facing workflows.
@@ -23,9 +37,3 @@ Initial standalone release.
 - Added customization folder discovery, scanning, direct save, atomic replacement, and timestamped backups.
 - Added a token-protected loopback desktop host with a fully embedded offline interface.
 - Added Windows standalone packaging, CI, release automation, and GitHub publishing scripts.
-
-### Publishing fix
-
-- `PUSH_TO_GITHUB.bat` no longer requires Go or Node.js to be installed locally when GitHub release creation is selected.
-- Release builds are dispatched to a Windows GitHub Actions runner, watched to completion, and verified before the publisher reports success.
-- Added manual `workflow_dispatch` release support with an explicit version input.

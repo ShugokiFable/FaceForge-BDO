@@ -1,36 +1,37 @@
-FACEFORGE BDO 0.3.0
+FACEFORGE BDO 0.4.0
 ===================
 
 RUN THE APP
 -----------
 Double-click:
-  FaceForge BDO 0.3.0 - STANDALONE.exe
+  FaceForge BDO 0.4.0 - STANDALONE.exe
 
 The EXE opens a dedicated FaceForge BDO desktop window.
 It does not open your normal browser. Close the window or use Settings > Exit FaceForge BDO when finished.
 
-NORMAL WORKFLOWS
-----------------
-1. Face from Photo
+NORMAL WORKFLOW
+---------------
+1. Create Face
    - Choose the target face image.
    - Load a starting BDO preset.
-   - Optionally add a helper preset and screenshots for automatic suggestions.
-   - Continue to Merge Presets to generate and save the final file.
+   - Click Create Face Preset.
+   - Save directly to BDO or download the generated preset.
 
-2. Merge Presets
-   - Load the Starting preset.
-   - Load the Preset to borrow from.
-   - Pick a quick mix or adjust individual feature weights.
-   - Create, download, or save the merged preset.
-
-3. Preset Library
+2. Build your reference library once
+   - Open Preset Library.
    - Scan the BDO customization folder.
-   - Send files directly into either normal workflow.
+   - For presets you may want FaceForge to learn from, click Add Screenshot.
+   - Attach one clean in-game screenshot of that preset.
 
-ADVANCED TOOLS
---------------
-Preset Laboratory and Calibration are under Advanced Tools.
-They are optional reverse-engineering utilities and are not required for normal merging.
+3. Adjust if needed
+   - Open Adjust Result on the generated result card.
+   - Supported facial groups are already prefilled.
+   - Unsupported groups stay at 0% unless you change them.
+
+MORE TOOLS
+----------
+Merge Presets, Preset Laboratory, and Calibration are under More Tools.
+They are optional and no longer block the normal Create Face workflow.
 
 BACKUPS
 -------

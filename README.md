@@ -2,7 +2,7 @@
 
 # FaceForge BDO
 
-**Offline image-guided Black Desert preset laboratory and deterministic blender.**
+**Offline Black Desert preset workshop with direct photo-to-preset generation, deterministic blending, and binary inspection tools.**
 
 Windows-first. One standalone EXE. No game injection, process memory access, macros, or cloud face upload.
 
@@ -29,13 +29,15 @@ A 50% region blend selects an exact rounded half of that region's mapped blocks.
 
 Face images are analyzed locally with the bundled MediaPipe Face Landmarker. The app measures normalized facial proportions such as eye spacing, face aspect, nose width, mouth width, jaw width, and lower-face length.
 
-For useful image guidance, provide three portraits:
+For useful image guidance, build a local reference library over time:
 
-1. the target face,
-2. a screenshot of the base preset,
-3. a screenshot of the donor preset.
+1. scan your preset folder,
+2. attach one in-game screenshot to any preset you want FaceForge to learn from,
+3. return to Create Face and let the app reuse those profiled references automatically.
 
-The app estimates which visible reference is closer in each supported region and turns that into confidence-scored blend suggestions. This is deliberately honest: a target photo alone cannot reveal BDO's encrypted preset values.
+A screenshot for the starting preset is optional. If it exists, FaceForge can use it. If it does not, the app still works and falls back honestly to the closest profiled same-class references for supported facial groups.
+
+The app now supports a direct Create Face workflow. You provide a target photo and a starting preset. FaceForge then searches your local scanned preset library for same-class presets that already have linked screenshot profiles, selects the closest references for supported facial groups, and generates the result on the same screen. If the library has no compatible profiled presets yet, FaceForge tells you so instead of pretending it can infer encrypted BDO values from a raw photo alone.
 
 ### Preset Laboratory
 
@@ -81,7 +83,7 @@ The calibration workflow exists specifically to replace broad starter regions wi
 Download the current standalone EXE from the GitHub release or the packaged release ZIP:
 
 ```text
-FaceForge BDO 0.3.0 - STANDALONE.exe
+FaceForge BDO 0.4.0 - STANDALONE.exe
 ```
 
 Double-click it. The EXE opens a dedicated FaceForge BDO desktop window and keeps its private token-protected service bound to `127.0.0.1` only. Close the window or use **Settings → Exit FaceForge BDO** when finished.
@@ -98,7 +100,7 @@ Local build requirements:
 .\build.ps1
 ```
 
-The output is written to `artifacts\FaceForge BDO 0.3.0 - STANDALONE.exe`.
+The output is written to `artifacts\FaceForge BDO 0.4.0 - STANDALONE.exe`.
 
 Run the full local packaging pipeline with `package.ps1`, or double-click `BUILD_EXE.bat`.
 
