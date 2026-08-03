@@ -98,8 +98,6 @@ func TestPowerShellEntryPointsDoNotUsePSScriptRootInParamDefaults(t *testing.T) 
 	for _, relative := range []string{
 		"../../build.ps1",
 		"../../package.ps1",
-		"../../publish-github.ps1",
-		"../../scripts/verify-release.ps1",
 	} {
 		data, err := os.ReadFile(relative)
 		if err != nil {

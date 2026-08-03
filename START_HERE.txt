@@ -38,9 +38,17 @@ BACKUPS
 Overwriting an existing preset creates a timestamped backup under:
   .FaceForge BDO Backups
 
-BUILD OR PUBLISH
-----------------
-- BUILD_EXE.bat performs a local build and requires Go 1.22+ and Node.js 20+.
-- PUSH_TO_GITHUB.bat creates or updates the repository.
-- When release creation is selected, GitHub Actions builds the EXE on a Windows runner.
-  Go and Node.js do not need to be installed locally just to publish the release.
+BUILD FROM SOURCE
+-----------------
+This clean source pack intentionally contains no old repair, retry, push, or publishing BAT files.
+
+Requirements:
+  Go 1.22+
+  Node.js 20+
+  PowerShell
+
+Run:
+  .\build.ps1
+
+Or create the full local package with:
+  .\package.ps1

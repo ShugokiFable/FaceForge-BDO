@@ -104,23 +104,27 @@ The output is written to `artifacts\FaceForge BDO 0.4.0 - STANDALONE.exe`.
 
 Run the full local packaging pipeline with `package.ps1`, or double-click `BUILD_EXE.bat`.
 
-## Push to GitHub
+## Build and package locally
 
-Install and authenticate the GitHub CLI, then double-click:
+This clean source pack deliberately contains no publishing or repair BAT files.
 
-```text
-PUSH_TO_GITHUB.bat
-```
+Local requirements:
 
-The publisher can initialize the repository, commit changes, create or connect the GitHub repository, and push `main`. When you choose **Build and create GitHub release**, the build runs on a Windows GitHub Actions runner. Go and Node.js are therefore not required on your PC merely to publish a release.
+- Go 1.22 or newer
+- Node.js 20 or newer
+- PowerShell 7 or Windows PowerShell 5.1
 
-For direct PowerShell use:
+Build the executable:
 
 ```powershell
-.\publish-github.ps1 -Repository FaceForge-BDO -Visibility Public -CreateRelease
+.\build.ps1
 ```
 
-The publisher waits for the GitHub Actions run and reports the final release URL. `BUILD_EXE.bat` still requires the local Go and Node.js toolchains because it performs a local build.
+Build the executable plus local release archives:
+
+```powershell
+.\package.ps1
+```
 
 ## Source layout
 
