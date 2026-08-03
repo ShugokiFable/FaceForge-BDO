@@ -107,7 +107,7 @@ func TestProtectedClassBlockIsNeverChangedByDefault(t *testing.T) {
 	}
 }
 
-func TestWeightedBlendIsDeterministicAndUsesExactProportion(t *testing.T) {
+func TestWeightedBlendIsDeterministicAndProducesAnIntermediatePreset(t *testing.T) {
 	schema := testSchema(t)
 	base := parsedFixture(t, "Cute Lahn")
 	donor := parsedFixture(t, "Demure Lahn")
@@ -128,16 +128,23 @@ func TestWeightedBlendIsDeterministicAndUsesExactProportion(t *testing.T) {
 		t.Fatal("same weighted recipe produced different output")
 	}
 
+	if first.ChangedBytes == 0 {
+		t.Fatal("weighted decrypted blend did not change any plaintext customization bytes")
+	}
+
 	group, _ := schema.Group("face_geometry")
-	wantDonorBlocks := int(float64(len(group.BlockIndices()))*0.5 + 0.5)
-	gotDonorBlocks := 0
+	foundIntermediate := false
 	for _, index := range group.BlockIndices() {
-		if first.Provenance[index] == "demure" {
-			gotDonorBlocks++
+		gotPlain, _ := first.Preset.PlainBlock(index)
+		basePlain, _ := base.PlainBlock(index)
+		donorPlain, _ := donor.PlainBlock(index)
+		if gotPlain != basePlain && gotPlain != donorPlain {
+			foundIntermediate = true
+			break
 		}
 	}
-	if gotDonorBlocks != wantDonorBlocks {
-		t.Fatalf("donor block count = %d, want exact rounded proportion %d", gotDonorBlocks, wantDonorBlocks)
+	if !foundIntermediate {
+		t.Fatal("expected at least one face_geometry block to be interpolated instead of copied from the base or donor")
 	}
 }
 

@@ -78,6 +78,36 @@ func TestBlockReturnsExactCipherBlock(t *testing.T) {
 	}
 }
 
+func TestPlainBlockReturnsExpectedDecryptedBytes(t *testing.T) {
+	parsed, err := Parse(loadFixture(t, "Cute Lahn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	block, err := parsed.PlainBlock(9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [8]byte{0x00, 0x00, 0x00, 0x00, 0x0b, 0x06, 0x01, 0x06}
+	if block != want {
+		t.Fatalf("PlainBlock(9) = %x, want %x", block, want)
+	}
+}
+
+func TestParsePlainRoundTripsBackToOriginalCiphertext(t *testing.T) {
+	parsed, err := Parse(loadFixture(t, "Cute Lahn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip, err := ParsePlain(parsed.PlainBytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(roundTrip.Bytes(), parsed.Bytes()) {
+		t.Fatal("ParsePlain did not rebuild the original ciphertext preset")
+	}
+}
+
 func TestBlockRejectsOutOfRangeIndex(t *testing.T) {
 	parsed, err := Parse(loadFixture(t, "Cute Lahn"))
 	if err != nil {
@@ -89,6 +119,9 @@ func TestBlockRejectsOutOfRangeIndex(t *testing.T) {
 	}
 	if _, err := parsed.Block(parsed.BlockCount()); err == nil {
 		t.Fatal("Block(BlockCount()) unexpectedly succeeded")
+	}
+	if _, err := parsed.PlainBlock(parsed.BlockCount()); err == nil {
+		t.Fatal("PlainBlock(BlockCount()) unexpectedly succeeded")
 	}
 }
 

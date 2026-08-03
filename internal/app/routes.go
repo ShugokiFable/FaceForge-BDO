@@ -37,6 +37,7 @@ func (s *server) routes() {
 	s.mux.HandleFunc("/api/compare", s.authenticated(requireMethod(http.MethodPost, s.compare)))
 	s.mux.HandleFunc("/api/blend", s.authenticated(requireMethod(http.MethodPost, s.blend)))
 	s.mux.HandleFunc("/api/calibration/observe", s.authenticated(requireMethod(http.MethodPost, s.observeCalibration)))
+	s.mux.HandleFunc("/api/reference-catalog", s.authenticated(s.referenceCatalog))
 	s.mux.HandleFunc("/api/folder/scan", s.authenticated(requireMethod(http.MethodGet, s.scanFolder)))
 	s.mux.HandleFunc("/api/folder/read", s.authenticated(requireMethod(http.MethodPost, s.readPreset)))
 	s.mux.HandleFunc("/api/save", s.authenticated(requireMethod(http.MethodPost, s.savePreset)))
@@ -53,6 +54,36 @@ func (s *server) routes() {
 		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = writer.Write([]byte(ProductName + " local service"))
 	})
+}
+
+func (s *server) referenceCatalog(writer http.ResponseWriter, request *http.Request) {
+	switch request.Method {
+	case http.MethodGet:
+		catalog, err := storage.LoadReferenceCatalog(s.config.ReferenceCatalogPath)
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(writer, http.StatusOK, catalog)
+	case http.MethodPost:
+		var catalog storage.ReferenceCatalog
+		if !decodeJSON(writer, request, &catalog) {
+			return
+		}
+		if err := storage.SaveReferenceCatalog(s.config.ReferenceCatalogPath, catalog); err != nil {
+			writeError(writer, http.StatusInternalServerError, err.Error())
+			return
+		}
+		saved, err := storage.LoadReferenceCatalog(s.config.ReferenceCatalogPath)
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(writer, http.StatusOK, saved)
+	default:
+		writer.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		writeError(writer, http.StatusMethodNotAllowed, "Method not allowed.")
+	}
 }
 
 func (s *server) status(writer http.ResponseWriter, _ *http.Request) {
@@ -188,6 +219,7 @@ func (s *server) blend(writer http.ResponseWriter, request *http.Request) {
 		"data":          base64.StdEncoding.EncodeToString(result.Preset.Bytes()),
 		"sha256":        result.Preset.SHA256(),
 		"changedBlocks": result.ChangedBlocks,
+		"changedBytes":  result.ChangedBytes,
 		"provenance":    result.Provenance,
 		"warnings":      result.Warnings,
 		"sidecar":       string(sidecar),

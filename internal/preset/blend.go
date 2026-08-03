@@ -1,11 +1,9 @@
 package preset
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 )
 
@@ -26,16 +24,12 @@ type Recipe struct {
 type BlendResult struct {
 	Preset        *Preset           `json:"-"`
 	ChangedBlocks []int             `json:"changedBlocks"`
+	ChangedBytes  int               `json:"changedBytes"`
 	Provenance    map[int]string    `json:"provenance"`
 	Warnings      []string          `json:"warnings,omitempty"`
 	Recipe        Recipe            `json:"recipe"`
 	BaseSHA256    string            `json:"baseSha256"`
 	DonorSHA256   map[string]string `json:"donorSha256"`
-}
-
-type rankedBlock struct {
-	index int
-	rank  uint64
 }
 
 func Blend(base *Preset, donors map[string]*Preset, recipe Recipe, schema Schema) (*BlendResult, error) {
@@ -65,10 +59,11 @@ func Blend(base *Preset, donors map[string]*Preset, recipe Recipe, schema Schema
 		donorHashes[id] = donor.SHA256()
 	}
 
-	output := base.Bytes()
+	outputPlain := base.PlainBytes()
 	provenance := make(map[int]string)
 	warnings := make([]string, 0)
 	usedGroups := make(map[string]struct{}, len(recipe.Groups))
+	changedBlocks := make(map[int]struct{})
 
 	for _, instruction := range recipe.Groups {
 		if _, duplicate := usedGroups[instruction.GroupID]; duplicate {
@@ -91,18 +86,24 @@ func Blend(base *Preset, donors map[string]*Preset, recipe Recipe, schema Schema
 			warnings = append(warnings, fmt.Sprintf("Protected group %q was preserved from the base preset.", group.Name))
 			continue
 		}
+		if instruction.Weight <= 0 {
+			continue
+		}
 
-		indices := group.BlockIndices()
-		selected := selectWeightedBlocks(indices, instruction.Weight, recipe.Seed, group.ID, base.SHA256(), donor.SHA256())
-		for _, index := range selected {
-			block, _ := donor.Block(index)
+		for _, index := range group.BlockIndices() {
+			baseBlock, _ := base.PlainBlock(index)
+			donorBlock, _ := donor.PlainBlock(index)
+			blendedBlock := blendPlainBlock(baseBlock, donorBlock, instruction.Weight)
 			start := HeaderSize + index*BlockSize
-			copy(output[start:start+BlockSize], block[:])
-			provenance[index] = instruction.DonorID
+			copy(outputPlain[start:start+BlockSize], blendedBlock[:])
+			if blendedBlock != baseBlock {
+				provenance[index] = instruction.DonorID
+				changedBlocks[index] = struct{}{}
+			}
 		}
 	}
 
-	blended, err := Parse(output)
+	blended, err := ParsePlain(outputPlain)
 	if err != nil {
 		return nil, fmt.Errorf("generated preset failed validation: %w", err)
 	}
@@ -117,42 +118,142 @@ func Blend(base *Preset, donors map[string]*Preset, recipe Recipe, schema Schema
 	if err != nil {
 		return nil, err
 	}
+	plainByteChanges, err := countPlainByteChanges(base, blended)
+	if err != nil {
+		return nil, err
+	}
 	return &BlendResult{
 		Preset:        blended,
 		ChangedBlocks: comparison.ChangedBlocks,
+		ChangedBytes:  plainByteChanges,
 		Provenance:    provenance,
-		Warnings:      warnings,
+		Warnings:      dedupeWarnings(warnings),
 		Recipe:        recipe,
 		BaseSHA256:    base.SHA256(),
 		DonorSHA256:   donorHashes,
 	}, nil
 }
 
-func selectWeightedBlocks(indices []int, weight float64, seed, groupID, baseHash, donorHash string) []int {
-	if len(indices) == 0 || weight <= 0 {
-		return nil
+func blendPlainBlock(base, donor [BlockSize]byte, weight float64) [BlockSize]byte {
+	if weight <= 0 {
+		return base
 	}
 	if weight >= 100 {
-		return append([]int(nil), indices...)
+		return donor
 	}
 
-	count := int(math.Floor(float64(len(indices))*weight/100 + 0.5))
-	ranked := make([]rankedBlock, 0, len(indices))
-	for _, index := range indices {
-		material := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%d", seed, groupID, baseHash, donorHash, index)
-		sum := sha256.Sum256([]byte(material))
-		ranked = append(ranked, rankedBlock{index: index, rank: binary.BigEndian.Uint64(sum[:8])})
-	}
-	sort.Slice(ranked, func(i, j int) bool {
-		if ranked[i].rank == ranked[j].rank {
-			return ranked[i].index < ranked[j].index
+	result := base
+	changed := false
+	fallbackIndex := -1
+	fallbackDelta := -1
+	for index := 0; index < BlockSize; index++ {
+		if base[index] == donor[index] {
+			continue
 		}
-		return ranked[i].rank < ranked[j].rank
-	})
-	selected := make([]int, 0, count)
-	for _, candidate := range ranked[:count] {
-		selected = append(selected, candidate.index)
+		delta := absInt(int(donor[index]) - int(base[index]))
+		if delta > fallbackDelta {
+			fallbackDelta = delta
+			fallbackIndex = index
+		}
+		result[index] = blendByte(base[index], donor[index], weight)
+		if result[index] != base[index] {
+			changed = true
+		}
 	}
-	sort.Ints(selected)
-	return selected
+
+	if !changed && fallbackIndex >= 0 {
+		result[fallbackIndex] = nudgeToward(base[fallbackIndex], donor[fallbackIndex])
+	}
+	return result
+}
+
+func blendByte(base, donor byte, weight float64) byte {
+	if base == donor {
+		return base
+	}
+	if weight <= 0 {
+		return base
+	}
+	if weight >= 100 {
+		return donor
+	}
+
+	baseInt := int(base)
+	donorInt := int(donor)
+	delta := absInt(donorInt - baseInt)
+	bothPercentLike := baseInt <= 100 && donorInt <= 100
+	linearFriendly := bothPercentLike || delta <= 12 || (baseInt == 0 && donorInt <= 100) || (donorInt == 0 && baseInt <= 100)
+	if linearFriendly {
+		mixed := float64(baseInt) + (float64(donorInt-baseInt) * weight / 100.0)
+		value := int(math.Round(mixed))
+		if value < 0 {
+			value = 0
+		}
+		if value > 255 {
+			value = 255
+		}
+		return byte(value)
+	}
+
+	if weight < 50 {
+		return base
+	}
+	return donor
+}
+
+func nudgeToward(base, donor byte) byte {
+	if base == donor {
+		return base
+	}
+	if base < donor {
+		return base + 1
+	}
+	return base - 1
+}
+
+func countPlainByteChanges(left, right *Preset) (int, error) {
+	if left == nil || right == nil {
+		return 0, fmt.Errorf("both presets are required")
+	}
+	if left.Version() != right.Version() || left.BlockCount() != right.BlockCount() {
+		return 0, fmt.Errorf("preset versions differ")
+	}
+	plainLeft := left.PlainBytes()
+	plainRight := right.PlainBytes()
+	count := 0
+	for index := HeaderSize; index < len(plainLeft) && index < len(plainRight); index++ {
+		if plainLeft[index] != plainRight[index] {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func dedupeWarnings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func (result BlendResult) MarshalJSON() ([]byte, error) {
+	type alias BlendResult
+	return json.Marshal(alias(result))
 }

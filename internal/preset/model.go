@@ -13,9 +13,11 @@ const (
 var DefaultCipherBlock = [BlockSize]byte{0x41, 0xef, 0x58, 0x6a, 0xf7, 0xca, 0x4f, 0x0e}
 
 type Preset struct {
-	version uint32
-	raw     []byte
-	blocks  [][BlockSize]byte
+	version     uint32
+	raw         []byte
+	blocks      [][BlockSize]byte
+	plain       []byte
+	plainBlocks [][BlockSize]byte
 }
 
 func (p *Preset) Version() uint32 {
@@ -37,4 +39,11 @@ func (p *Preset) Bytes() []byte {
 		return nil
 	}
 	return append([]byte(nil), p.raw...)
+}
+
+func (p *Preset) PlainBytes() []byte {
+	if p == nil {
+		return nil
+	}
+	return append([]byte(nil), p.plain...)
 }

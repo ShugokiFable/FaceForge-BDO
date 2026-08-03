@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.0 · 2026-08-03
+
+- Replaced ciphertext block swapping with a real decrypted preset engine for BDO version 20 presets.
+- Added independent Thin-ICE preset decryption and re-encryption with strict round-trip validation.
+- Blend operations now modify decrypted customization bytes and re-encrypt the finished preset instead of selecting whole encrypted blocks.
+- 0% group weight still preserves the base preset, while 100% still copies the donor exactly for the selected group.
+- Mid-range weights now generate genuine intermediate presets for mapped groups instead of crude all-or-nothing block transplants.
+- Added plaintext block access, plaintext round-trip tests, and regression coverage for interpolated output.
+- Blend responses now report `changedBytes` in addition to changed encrypted blocks.
+- Kept protected metadata and class identity preservation rules intact.
+
+
+## 0.5.2 · 2026-08-03
+
+- Fixed automatic Create Face producing a zero-change copy when the only profiled reference was the starting preset itself.
+- The starting preset is now used only as the protected base and optional interpolation profile. It can never count as its own donor.
+- Create Preset stays disabled until at least one genuinely different screenshot-profiled preset with the same class fingerprint is available.
+- Automatic generation now rejects zero-change blends and explains that the selected reference has identical mapped face blocks instead of presenting the original face as a successful result.
+- Moved the reference screenshot profile catalog from per-port browser storage to `%LOCALAPPDATA%\FaceForge BDO\reference-catalog.json`, so profiles survive app restarts and version upgrades.
+- Added authenticated reference-catalog load/save API routes with atomic on-disk persistence.
+- Added persistence, API, self-donor rejection, and zero-change rejection regression tests.
+
 ## 0.5.1 · 2026-08-03
 
 - Fixed Create Face appearing permanently stuck after an immediate same-preset fallback result.

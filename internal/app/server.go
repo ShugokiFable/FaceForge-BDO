@@ -12,17 +12,18 @@ import (
 
 const (
 	ProductName = "FaceForge BDO"
-	Version     = "0.5.1"
+	Version     = "0.6.0"
 	TokenHeader = "X-FaceForge-Token"
 	maxBodySize = 8 << 20
 )
 
 type Config struct {
-	Token            string
-	Schema           preset.Schema
-	CustomizationDir string
-	StaticFS         fs.FS
-	Shutdown         func()
+	Token                string
+	Schema               preset.Schema
+	CustomizationDir     string
+	ReferenceCatalogPath string
+	StaticFS             fs.FS
+	Shutdown             func()
 }
 
 type server struct {

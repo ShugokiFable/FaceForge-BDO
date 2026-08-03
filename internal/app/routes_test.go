@@ -76,7 +76,7 @@ func TestStatusReturnsVersionAndSchema(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["name"] != "FaceForge BDO" || payload["version"] != "0.5.1" {
+	if payload["name"] != "FaceForge BDO" || payload["version"] != "0.5.2" {
 		t.Fatalf("unexpected status payload: %+v", payload)
 	}
 }
@@ -177,5 +177,49 @@ func TestAPIRejectsWrongMethod(t *testing.T) {
 	response := request(t, handler, http.MethodGet, "/api/inspect", "secret", nil)
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", response.Code)
+	}
+}
+
+func TestReferenceCatalogAPIStoresProfilesOnDisk(t *testing.T) {
+	catalogPath := filepath.Join(t.TempDir(), "reference-catalog.json")
+	handler := NewHandler(Config{
+		Token:                "secret",
+		Schema:               appSchema(t),
+		CustomizationDir:     t.TempDir(),
+		ReferenceCatalogPath: catalogPath,
+	})
+	payload := map[string]any{
+		"version": 1,
+		"profiles": map[string]any{
+			"ABCDEF": map[string]any{
+				"sha256":           "ABCDEF",
+				"name":             "Striker Reference",
+				"classFingerprint": "class-one",
+				"imageName":        "striker.png",
+				"metrics":          map[string]float64{"jawWidth": 0.62},
+				"quality":          map[string]float64{"symmetry": 0.91},
+			},
+		},
+	}
+	response := request(t, handler, http.MethodPost, "/api/reference-catalog", "secret", payload)
+	if response.Code != http.StatusOK {
+		t.Fatalf("save status = %d; body=%s", response.Code, response.Body.String())
+	}
+	response = request(t, handler, http.MethodGet, "/api/reference-catalog", "secret", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("load status = %d; body=%s", response.Code, response.Body.String())
+	}
+	var loaded struct {
+		Profiles map[string]struct {
+			SHA256 string `json:"sha256"`
+			Name   string `json:"name"`
+		} `json:"profiles"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &loaded); err != nil {
+		t.Fatal(err)
+	}
+	profile, ok := loaded.Profiles["abcdef"]
+	if !ok || profile.SHA256 != "abcdef" || profile.Name != "Striker Reference" {
+		t.Fatalf("unexpected catalog response: %+v", loaded.Profiles)
 	}
 }

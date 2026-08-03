@@ -2,7 +2,7 @@
 
 # FaceForge BDO
 
-**Offline Black Desert preset workshop with direct photo-to-preset generation, deterministic blending, and binary inspection tools.**
+**Offline Black Desert preset workshop with direct photo-to-preset generation, decrypted preset blending, and binary inspection tools.**
 
 Windows-first. One standalone EXE. No game injection, process memory access, macros, or cloud face upload.
 
@@ -12,18 +12,18 @@ Windows-first. One standalone EXE. No game injection, process memory access, mac
 
 FaceForge BDO reads Black Desert customization format **version 20** files, validates their exact binary structure, and lets you inspect, compare, blend, calibrate, download, or safely save generated presets.
 
-The supplied research samples established a fixed **924-byte** record containing a four-byte version header followed by **115 encrypted or obfuscated eight-byte blocks**. FaceForge BDO works with those blocks without pretending their ciphertext is directly readable slider data.
+The supplied research samples established a fixed **924-byte** record containing a four-byte version header followed by **115 encrypted eight-byte blocks**. FaceForge BDO now decrypts those blocks, edits the confirmed plaintext preset payload conservatively, and re-encrypts the finished file before export or save.
 
 ### Preset Blender
 
 - Load a base and donor preset.
 - Give every mapped feature region an independent 0–100% donor weight.
-- Produce deterministic output: the same files, weights, and seed generate the same preset.
+- Produce deterministic output: the same files and weights generate the same preset.
 - Preserve protected metadata and the confirmed class identity block from the base.
 - Reject cross-class donors unless the experimental override is explicitly enabled.
 - Export a provenance report showing which donor supplied each changed block.
 
-A 50% region blend selects an exact rounded half of that region's mapped blocks. It is a reproducible structural hybrid, not arithmetic interpolation of encrypted bytes.
+Group blends now operate on decrypted preset data. Mid-range weights produce conservative interpolated customization bytes where possible, while 0% preserves the base and 100% copies the donor exactly for the selected group.
 
 ### Create from Image
 
@@ -83,7 +83,7 @@ The calibration workflow exists specifically to replace broad starter regions wi
 Download the current standalone EXE from the GitHub release or the packaged release ZIP:
 
 ```text
-FaceForge BDO 0.5.1 - STANDALONE.exe
+FaceForge BDO 0.6.0 - STANDALONE.exe
 ```
 
 Double-click it. The EXE opens a dedicated FaceForge BDO desktop window and keeps its private token-protected service bound to `127.0.0.1` only. Close the window or use **Settings → Exit FaceForge BDO** when finished.
@@ -100,7 +100,7 @@ Local build requirements:
 .\build.ps1
 ```
 
-The output is written to `artifacts\FaceForge BDO 0.5.1 - STANDALONE.exe`.
+The output is written to `artifacts\FaceForge BDO 0.6.0 - STANDALONE.exe`.
 
 Run the full local packaging pipeline with `package.ps1`, or double-click `BUILD_EXE.bat`.
 
@@ -152,8 +152,8 @@ scripts/                 QA and release helpers
 
 ## Honest limits
 
-- Feature regions beyond class identity and face type are still broad starter mappings.
-- Weighted blending is deterministic block selection, not numeric slider interpolation.
+- Feature regions beyond class identity are still broad starter mappings, even though FaceForge now edits decrypted preset bytes instead of raw ciphertext.
+- Weighted blending now edits decrypted preset bytes conservatively, but the binary map is still incomplete and not every field is fully understood.
 - Image guidance needs photographed base and donor presets to connect visible measurements to encrypted data.
 - Cross-class blending can produce unusable faces because classes may use incompatible meshes, assets, and valid ranges.
 - Game updates may introduce a new preset format version requiring a new schema and parser.

@@ -150,11 +150,16 @@ func main() {
 	defer listener.Close()
 
 	shutdownRequested := make(chan struct{}, 1)
+	referenceCatalogPath := ""
+	if dataDir := localDataDir(); dataDir != "" {
+		referenceCatalogPath = filepath.Join(dataDir, "reference-catalog.json")
+	}
 	handler := app.NewHandler(app.Config{
-		Token:            token,
-		Schema:           schema,
-		CustomizationDir: filepath.Clean(customizationDir),
-		StaticFS:         webassets.FS,
+		Token:                token,
+		Schema:               schema,
+		CustomizationDir:     filepath.Clean(customizationDir),
+		ReferenceCatalogPath: referenceCatalogPath,
+		StaticFS:             webassets.FS,
 		Shutdown: func() {
 			select {
 			case shutdownRequested <- struct{}{}:

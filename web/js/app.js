@@ -1,6 +1,6 @@
 import { apiGet, apiPost, hasToken, setToken } from './api.js';
 import { analyzeFaceImage } from './face-analysis.js';
-import { buildAutomaticPlan, normalizeBlendResult, createBaseFallbackResult } from './create-face.js';
+import { buildAutomaticPlan, assertUsefulBlendResult } from './create-face.js';
 import {
   calibrationMerge,
   createInitialState,
@@ -149,6 +149,8 @@ function createDisabledReason() {
   if (state.createFace.stage === 'processing') return 'FaceForge is already building a result.';
   if (!state.portraits.target?.analysis) return 'Add a target photo.';
   if (!state.presets.base) return 'Add a starting preset.';
+  const referenceInfo = sameClassProfileSummary();
+  if (!referenceInfo.ready) return 'Profile a different same-class preset in Preset Library.';
   return '';
 }
 
@@ -160,23 +162,19 @@ function formatDuration(durationMs) {
 
 function sameClassProfileSummary() {
   if (!state.presets.base?.inspect?.classFingerprint) {
-    return { total: 0, extras: 0, baseProfile: null, ready: false };
+    return { extras: 0, baseProfile: null, ready: false };
   }
   const baseClass = state.presets.base.inspect.classFingerprint;
   const baseSha = String(state.presets.base.inspect.sha256 ?? '').toLowerCase();
   const baseProfile = getProfileForPreset(state.presets.base);
-  let total = baseProfile ? 1 : 0;
   let extras = 0;
   for (const item of state.library.items) {
     if (item.classFingerprint !== baseClass) continue;
-    const profile = getProfileForPreset(item);
-    if (!profile) continue;
-    const sha = String(item.sha256 ?? '').toLowerCase();
-    if (sha === baseSha) continue;
-    total += 1;
+    if (!getProfileForPreset(item)) continue;
+    if (String(item.sha256 ?? '').toLowerCase() === baseSha) continue;
     extras += 1;
   }
-  return { total, extras, baseProfile, ready: total > 0 };
+  return { extras, baseProfile, ready: extras > 0 };
 }
 
 function renderCreateResultArea() {
@@ -213,7 +211,7 @@ function renderAdjustmentsPanel() {
 }
 
 function renderReferenceRequiredPanel() {
-  const reason = state.createFace.referenceNeeded ?? 'FaceForge needs at least one screenshot-linked preset for this class before it can match a photo honestly.';
+  const reason = state.createFace.referenceNeeded ?? 'Profile a different same-class preset. The starting preset cannot be used as its own donor.';
   return `<div class="panel"><div class="panel-header"><div><div class="panel-title">Reference screenshot needed</div><div class="panel-subtitle">Create Face uses your local profiled preset library as its matching brain.</div></div></div><div class="panel-body stack"><div class="callout warning">${escapeHTML(reason)}</div><div class="inline"><button class="button primary" data-action="open-library-profile-help">Open Preset Library</button><button class="button" data-nav="merge">Use Manual Merge</button></div></div></div>`;
 }
 
@@ -226,11 +224,11 @@ function renderCreateFace() {
     : !state.presets.base
       ? 'Waiting for a starting preset.'
       : referenceInfo.ready
-        ? `${referenceInfo.total} same-class profiled reference${referenceInfo.total === 1 ? '' : 's'} available automatically.`
-        : 'No profiled same-class reference is available yet.';
+        ? `${referenceInfo.extras} different same-class profiled reference${referenceInfo.extras === 1 ? '' : 's'} available automatically.`
+        : 'No different profiled same-class reference is available yet.';
   const referenceCallout = referenceInfo.ready
-    ? `<div class="callout success">Automatic matching is ready. ${referenceInfo.baseProfile ? 'Your starting preset already has a linked screenshot, so FaceForge can use it as a fallback reference.' : ''} ${referenceInfo.extras > 0 ? `${referenceInfo.extras} additional profiled same-class preset${referenceInfo.extras === 1 ? '' : 's'} can also be borrowed automatically.` : ''}</div>`
-    : `<div class="callout warning">This class still needs at least one screenshot-linked preset in Preset Library before automatic photo matching can do anything useful.</div>`;
+    ? `<div class="callout success">Automatic matching is ready. ${referenceInfo.extras} different profiled same-class preset${referenceInfo.extras === 1 ? '' : 's'} can be borrowed. ${referenceInfo.baseProfile ? 'The starting preset profile will improve interpolation, but it is never treated as a donor.' : ''}</div>`
+    : `<div class="callout warning">Profile at least one <strong>different</strong> preset of this class in Preset Library. The starting preset cannot change itself.</div>`;
   const processingPanel = flow.stage === 'processing'
     ? `<div class="panel panel-flat"><div class="panel-body stack"><div class="summary-strip triple"><div class="summary-stat"><span>Current step</span><strong>${escapeHTML(flow.processingStep || 'Working…')}</strong></div><div class="summary-stat"><span>Safety timeout</span><strong>25 seconds</strong></div><div class="summary-stat"><span>Behavior</span><strong>Automatic</strong></div></div>${workflowSteps([{ title: 'Analyze target face', text: 'Profile the face from the target image.' }, { title: 'Pick references', text: 'Choose the closest profiled same-class presets from your local library.' }, { title: 'Build preset', text: 'Generate and validate a same-class BDO preset.' }])}<div class="inline"><button class="button danger" data-action="cancel-create-face">Cancel</button></div></div></div>`
     : '';
@@ -368,7 +366,7 @@ function renderShell() {
   root.className = '';
   root.innerHTML = `<div class="app-shell">
     <header class="topbar"><div class="brand"><div class="brand-mark">FF</div><div class="brand-copy"><strong>FaceForge BDO</strong><span>Offline BDO preset workshop</span></div></div><div class="topbar-spacer"></div><div class="status-chip" title="${escapeHTML(state.settings.customizationDir)}"><span class="status-dot"></span>${escapeHTML(state.settings.customizationDir || 'Local service connected')}</div></header>
-    <aside class="sidebar"><div class="nav-label">Workspaces</div>${nav.map(([id, label, icon]) => `<button class="nav-button ${activeSidebarView() === id ? 'active' : ''}" data-nav="${id}"><span class="nav-icon">${icons[icon]}</span>${escapeHTML(label)}</button>`).join('')}<div class="sidebar-footer">Preset format v${state.status.presetVersion}<br>${state.status.groups?.length ?? 0} mapped regions<br>Photo workflow streamlined for 0.5.1</div></aside>
+    <aside class="sidebar"><div class="nav-label">Workspaces</div>${nav.map(([id, label, icon]) => `<button class="nav-button ${activeSidebarView() === id ? 'active' : ''}" data-nav="${id}"><span class="nav-icon">${icons[icon]}</span>${escapeHTML(label)}</button>`).join('')}<div class="sidebar-footer">Preset format v${state.status.presetVersion}<br>${state.status.groups?.length ?? 0} mapped regions<br>Photo workflow streamlined for 0.5.2</div></aside>
     <main class="main">${renderView()}</main>
   </div>`;
 }
@@ -396,6 +394,12 @@ function resetCreateFaceFlow(preserveInputs = true) {
     state.portraits.target = null;
     state.presets.base = null;
   }
+}
+
+async function persistReferenceCatalog() {
+  const saved = await apiPost('/api/reference-catalog', state.referenceCatalog, { timeoutMs: 10000 });
+  state.referenceCatalog = saved;
+  saveReferenceCatalog(saved);
 }
 
 function getProfileForPreset(presetLike) {
@@ -501,7 +505,7 @@ async function attachReferenceScreenshot(sha, file) {
       metrics: analysis.measurements.normalized,
       quality: analysis.measurements.quality
     });
-    saveReferenceCatalog(state.referenceCatalog);
+    await persistReferenceCatalog();
     addActivity(`Profiled screenshot for ${item.name}.`);
     toast(`Screenshot linked to ${item.name}.`, 'success');
     renderShell();
@@ -574,25 +578,10 @@ async function createFacePreset() {
         metrics: item.analysis.measurements.normalized
       }));
 
-    const fallbackId = 'base-profile';
-    if (baseProfile?.metrics) {
-      candidates.unshift({
-        id: fallbackId,
-        path: state.presets.base.path ?? '',
-        name: `${state.presets.base.name} (starting preset)`,
-        sha256: state.presets.base.inspect.sha256,
-        classFingerprint: baseClass,
-        useLoadedBase: true,
-        analysis: { measurements: { normalized: baseProfile.metrics, quality: baseProfile.quality } },
-        metrics: baseProfile.metrics
-      });
-    }
-
     const plan = buildAutomaticPlan({
       targetMetrics,
       baseMetrics: baseProfile?.metrics ?? null,
-      candidates,
-      baseCandidateId: fallbackId
+      candidates
     });
 
     if (!plan.selected.length) {
@@ -610,36 +599,26 @@ async function createFacePreset() {
     state.createFace.processingStep = 'Loading selected reference presets...';
     renderShell();
     const selected = plan.selected.map((item, index) => ({ ...item, id: item.id || `ref${index + 1}` }));
-    const baseOnlyFallback = selected.length === 1 && selected[0].id === fallbackId;
-    let result;
-    if (baseOnlyFallback) {
-      result = createBaseFallbackResult({
-        data: state.presets.base.data,
-        sha256: state.presets.base.inspect.sha256,
-        warnings: plan.warnings
-      });
-    } else {
-      const donors = await readCandidatePresets(selected);
-      state.createFace.processingStep = 'Building and validating the preset...';
-      renderShell();
-      const recipe = automaticRecipeFromPlan(plan);
-      const rawResult = await apiPost('/api/blend', {
-        base: state.presets.base.data,
-        donors,
-        recipe
-      }, {
-        timeoutMs: 25000,
-        signal: controller.signal
-      });
-      result = normalizeBlendResult(rawResult);
-    }
+    const donors = await readCandidatePresets(selected);
+    state.createFace.processingStep = 'Building and validating the preset...';
+    renderShell();
+    const recipe = automaticRecipeFromPlan(plan);
+    const rawResult = await apiPost('/api/blend', {
+      base: state.presets.base.data,
+      donors,
+      recipe
+    }, {
+      timeoutMs: 25000,
+      signal: controller.signal
+    });
+    const result = assertUsefulBlendResult(rawResult);
 
     state.createFace.stage = 'result';
     state.createFace.result = result;
     state.createFace.autoPlan = plan;
     state.createFace.candidates = selected;
     state.createFace.warnings = plan.warnings;
-    state.createFace.baseProfileFallback = selected.some((item) => item.id === fallbackId);
+    state.createFace.baseProfileFallback = false;
     state.createFace.lastDurationMs = Date.now() - startedAt;
     state.presets.generated = { name: outputFileName(), data: result.data };
     state.settings.outputFilename = outputFileName();
@@ -672,7 +651,7 @@ async function rebuildCreateFaceResult() {
       donors,
       recipe
     }, { timeoutMs: 25000 });
-    const result = normalizeBlendResult(rawResult);
+    const result = assertUsefulBlendResult(rawResult);
     state.createFace.result = result;
     state.createFace.lastDurationMs = Date.now() - startedAt;
     state.createFace.stage = 'result';
@@ -881,8 +860,12 @@ root.addEventListener('click', async (event) => {
   const removeProfile = event.target.closest('[data-remove-profile]');
   if (removeProfile) {
     state.referenceCatalog = removeReferenceProfile(state.referenceCatalog, removeProfile.dataset.removeProfile);
-    saveReferenceCatalog(state.referenceCatalog);
-    toast('Reference profile removed.', 'success');
+    try {
+      await persistReferenceCatalog();
+      toast('Reference profile removed.', 'success');
+    } catch (error) {
+      toast(`Could not save the profile catalog: ${error.message}`, 'error');
+    }
     renderShell();
   }
 });
@@ -993,6 +976,12 @@ async function start() {
   try {
     const status = await apiGet('/api/status');
     state = createInitialState(status);
+    try {
+      state.referenceCatalog = await apiGet('/api/reference-catalog', { timeoutMs: 10000 });
+      saveReferenceCatalog(state.referenceCatalog);
+    } catch (catalogError) {
+      addActivity(`Reference catalog could not be loaded: ${catalogError.message}`, 'error');
+    }
     addActivity(`Connected to FaceForge BDO ${status.version}.`);
     renderShell();
     scanLibrary();

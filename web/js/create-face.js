@@ -5,17 +5,6 @@ export const UNSUPPORTED_GROUPS = ['hair', 'body', 'makeup_detail', 'skin_finish
 
 
 
-export function createBaseFallbackResult({ data, sha256, warnings = [] }) {
-  return {
-    data,
-    sha256,
-    changedBlocks: [],
-    provenance: {},
-    warnings: Array.isArray(warnings) ? warnings : [],
-    sidecar: ''
-  };
-}
-
 export function normalizeBlendResult(result = {}) {
   return {
     ...result,
@@ -23,6 +12,14 @@ export function normalizeBlendResult(result = {}) {
     warnings: Array.isArray(result.warnings) ? result.warnings : [],
     provenance: result.provenance && typeof result.provenance === 'object' ? result.provenance : {}
   };
+}
+
+export function assertUsefulBlendResult(result = {}) {
+  const normalized = normalizeBlendResult(result);
+  if (normalized.changedBlocks.length === 0) {
+    throw new Error('The selected reference preset has the same mapped face blocks as the starting preset. Profile a visibly different same-class preset and try again.');
+  }
+  return normalized;
 }
 
 const GROUP_METRICS = {
@@ -76,16 +73,17 @@ function donorForGroup(ranked, groupId) {
   })[0] ?? null;
 }
 
-export function buildAutomaticPlan({ targetMetrics, baseMetrics = null, candidates = [], baseCandidateId = null }) {
+export function buildAutomaticPlan({ targetMetrics, baseMetrics = null, candidates = [], excludedCandidateIds = [] }) {
   if (!targetMetrics) throw new Error('A target face profile is required.');
-  const ranked = rankReferenceCandidates(targetMetrics, candidates);
+  const excluded = new Set(excludedCandidateIds.map(String));
+  const ranked = rankReferenceCandidates(targetMetrics, candidates.filter((candidate) => !excluded.has(String(candidate?.id))));
   if (ranked.length === 0) {
     return {
       ranked: [],
       selected: [],
       recipeGroups: [],
       groups: {},
-      warnings: ['FaceForge needs at least one screenshot-profiled same-class preset before it can match a photo honestly.'],
+      warnings: ['FaceForge needs at least one different screenshot-profiled same-class preset before it can create a changed face.'],
       confidence: 0,
       summary: 'No compatible references found.'
     };
@@ -125,9 +123,7 @@ export function buildAutomaticPlan({ targetMetrics, baseMetrics = null, candidat
     warnings.push('The starting preset has no screenshot profile, so FaceForge fully borrows the supported facial groups from the closest same-class references.');
   }
 
-  if (selected.length === 1 && selected[0]?.id === baseCandidateId) {
-    warnings.push('Only your starting preset is profiled right now. FaceForge can still build a valid result, but it may stay very close to that preset until you profile more same-class presets in Preset Library.');
-  } else if (selected.length === 1) {
+  if (selected.length === 1) {
     warnings.push('Only one compatible profiled reference was found, so the result is based on that single preset.');
   }
 

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { metricDistance, rankReferenceCandidates, buildAutomaticPlan, normalizeBlendResult, createBaseFallbackResult } from './create-face.js';
+import { metricDistance, rankReferenceCandidates, buildAutomaticPlan, normalizeBlendResult, assertUsefulBlendResult } from './create-face.js';
 
 const target = {
   faceAspect: 0.50,
@@ -46,18 +46,6 @@ test('buildAutomaticPlan selects supported groups and leaves unsupported groups 
   assert.match(plan.warnings.join(' '), /starting preset has no screenshot profile/i);
 });
 
-test('buildAutomaticPlan can fall back to the starting preset when it is the only profiled reference', () => {
-  const plan = buildAutomaticPlan({
-    targetMetrics: target,
-    baseMetrics: target,
-    baseCandidateId: 'base-profile',
-    candidates: [candidate('base-profile', 'Base', target)]
-  });
-
-  assert.equal(plan.selected.length, 1);
-  assert.equal(plan.selected[0].id, 'base-profile');
-  assert.match(plan.warnings.join(' '), /starting preset is profiled right now/i);
-});
 
 
 test('normalizeBlendResult converts null collections into empty collections', () => {
@@ -68,11 +56,23 @@ test('normalizeBlendResult converts null collections into empty collections', ()
 });
 
 
-test('createBaseFallbackResult returns an immediate zero-change result', () => {
-  const result = createBaseFallbackResult({ data: 'abc', sha256: 'deadbeef', warnings: ['only base'] });
-  assert.equal(result.data, 'abc');
-  assert.equal(result.sha256, 'deadbeef');
-  assert.deepEqual(result.changedBlocks, []);
-  assert.deepEqual(result.provenance, {});
-  assert.deepEqual(result.warnings, ['only base']);
+
+
+test('buildAutomaticPlan refuses to use the starting preset as its own donor', () => {
+  const plan = buildAutomaticPlan({
+    targetMetrics: target,
+    baseMetrics: target,
+    candidates: [candidate('base-profile', 'Base', target)],
+    excludedCandidateIds: ['base-profile']
+  });
+
+  assert.equal(plan.selected.length, 0);
+  assert.match(plan.warnings.join(' '), /different screenshot-profiled same-class preset/i);
+});
+
+test('assertUsefulBlendResult rejects a zero-change automatic result', () => {
+  assert.throws(
+    () => assertUsefulBlendResult({ changedBlocks: [] }),
+    /same mapped face blocks/i
+  );
 });

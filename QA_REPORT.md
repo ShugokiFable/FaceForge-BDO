@@ -1,39 +1,31 @@
-# FaceForge BDO 0.5.1 QA Report
+# FaceForge BDO 0.6.0 QA Report
 
 ## Summary
 
-This release restructures the main UX around a direct **Create Face** pipeline while preserving the existing binary parser, deterministic blender, local library scan, and advanced tools.
+This release fixes the automatic Create Face path so a starting preset can no longer be used as its own donor and screenshot profiles persist across launches.
 
-## Automated validation completed
+## Automated validation
 
 - `go test ./...`
-- `node --test web/js/*.test.mjs`
-- JavaScript syntax parsing for `web/js/app.js`, `web/js/create-face.js`, and `web/js/state.js`
+- `go vet ./...`
+- `node --test web/js/*.test.mjs scripts/*.test.mjs`
+- JavaScript syntax checks for the main application modules
+- Windows x64 GUI cross-build
 
-## New 0.5.1 workflow coverage
+## Workflow coverage
 
-- Create Face is now the default view after launch.
-- The normal path requires only:
-  - one target image,
-  - one starting preset.
-- Automatic generation remains honest:
-  - only same-class profiled library presets are used as references,
-  - if no compatible profiled references exist, the app shows a reference-required state instead of pretending it can infer encrypted slider values from a photo alone,
-  - unsupported groups remain at 0% until the user changes them manually.
-- Generated Create Face results stay on the same screen and expose:
-  - Save to BDO,
-  - Download Preset,
-  - Adjust Result.
-- Library screenshot profiling is stored locally in browser storage and does not upload portraits anywhere.
+- Create Face requires one target image, one starting preset, and at least one **different** screenshot-profiled preset with the same class fingerprint.
+- The starting preset profile may improve interpolation but is never counted as a donor.
+- If no distinct compatible donor exists, Create Preset is disabled with a direct explanation.
+- A generated automatic result with zero changed blocks is rejected instead of being presented as a successful face conversion.
+- Reference profiles are persisted in `%LOCALAPPDATA%\FaceForge BDO\reference-catalog.json` and are not uploaded.
+- Generated results remain on the Create Face screen with Save to BDO, Download Preset, and Adjust Result.
 
-## New 0.5.1 unit coverage
+## Regression coverage
 
-- Candidate distance scoring prefers closer references.
-- Automatic ranking orders the best profiled candidates first.
-- Automatic plans populate supported groups and keep unsupported groups at zero.
-- Existing portrait-picker, facial-metric, state, and calibration tests continue to pass.
-
-## Notes
-
-- The Windows EXE is still produced by the standard cross-compile build pipeline.
-- Merge Presets, Preset Laboratory, and Calibration remain available under More Tools and were not removed.
+- Reference catalogs survive save and reload with normalized SHA-256 keys.
+- Missing catalog files produce an empty valid catalog.
+- The authenticated catalog API writes and reloads profiles from disk.
+- Automatic planning excludes the starting preset when it appears in the candidate list.
+- Automatic generation rejects zero-change results.
+- Existing parser, blender, storage, face-analysis, picker, state, calibration, and native-window tests continue to pass.
