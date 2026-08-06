@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,14 +14,14 @@ import (
 const customizationOverrideEnv = "FACEFORGE_BDO_CUSTOMIZATION_DIR"
 
 type PresetFile struct {
-	Name             string    `json:"name"`
-	Path             string    `json:"path"`
-	Size             int64     `json:"size"`
-	ModifiedAt       time.Time `json:"modifiedAt"`
-	Version          uint32    `json:"version"`
-	SHA256           string    `json:"sha256"`
-	ClassFingerprint string    `json:"classFingerprint"`
-	DefaultBlocks    int       `json:"defaultBlocks"`
+	Name          string    `json:"name"`
+	Path          string    `json:"path"`
+	Size          int64     `json:"size"`
+	ModifiedAt    time.Time `json:"modifiedAt"`
+	Version       uint32    `json:"version"`
+	SHA256        string    `json:"sha256"`
+	ClassID       int       `json:"classId"`
+	CharacterName string    `json:"characterName"`
 }
 
 type ScanResult struct {
@@ -91,23 +90,15 @@ func ScanPresets(directory string) (ScanResult, error) {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %v", entry.Name(), infoErr))
 			continue
 		}
-		classBlock, _ := parsed.Block(preset.ClassBlockIndex)
-		defaultBlocks := 0
-		for index := 0; index < parsed.BlockCount(); index++ {
-			block, _ := parsed.Block(index)
-			if block == preset.DefaultCipherBlock {
-				defaultBlocks++
-			}
-		}
 		result.Presets = append(result.Presets, PresetFile{
-			Name:             entry.Name(),
-			Path:             path,
-			Size:             info.Size(),
-			ModifiedAt:       info.ModTime().UTC(),
-			Version:          parsed.Version(),
-			SHA256:           parsed.SHA256(),
-			ClassFingerprint: hex.EncodeToString(classBlock[:]),
-			DefaultBlocks:    defaultBlocks,
+			Name:          entry.Name(),
+			Path:          path,
+			Size:          info.Size(),
+			ModifiedAt:    info.ModTime().UTC(),
+			Version:       parsed.Version(),
+			SHA256:        parsed.SHA256(),
+			ClassID:       int(parsed.Class()),
+			CharacterName: parsed.Name(),
 		})
 	}
 	sort.Slice(result.Presets, func(i, j int) bool {

@@ -1,17 +1,24 @@
+// Each entry is the [min, max] raw ratio that maps to slider 0 and slider 100.
+// These are the tuning knobs of the whole tool: they decide how an ordinary face
+// lands on BDO's 0-100 scale. They are approximate windows over normal human
+// variation, not measured constants, so widen a pair if real photos keep pinning
+// a slider to an extreme. There is one entry per control in internal/preset/controls.go.
 const METRIC_RANGES = Object.freeze({
   faceAspect: [1.0, 1.65],
-  eyeSpacing: [0.16, 0.32],
+  cheekWidth: [0.62, 0.88],
+  jawWidth: [0.52, 0.92],
+  lowerFace: [0.30, 0.55],
+  foreheadHeight: [0.22, 0.42],
   eyeOpenness: [0.10, 0.38],
+  eyeSpacing: [0.16, 0.32],
+  eyeAngle: [-0.10, 0.18],
+  browHeight: [0.055, 0.13],
   noseWidth: [0.14, 0.30],
   mouthWidth: [0.28, 0.54],
-  jawWidth: [0.52, 0.92],
-  lowerFace: [0.30, 0.55]
+  lipThickness: [0.28, 0.62]
 });
 
-const GROUP_METRICS = Object.freeze({
-  face_geometry: ['faceAspect', 'noseWidth', 'mouthWidth', 'jawWidth', 'lowerFace'],
-  eyes_brows: ['eyeSpacing', 'eyeOpenness']
-});
+export const METRIC_NAMES = Object.freeze(Object.keys(METRIC_RANGES));
 
 export const clamp01 = (value) => Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
 
@@ -43,14 +50,30 @@ export function measureLandmarks(points) {
   const facialCenterX = ((points[234]?.x ?? 0) + (points[454]?.x ?? 0)) / 2;
   const noseCenterX = ((points[98]?.x ?? 0) + (points[327]?.x ?? 0)) / 2;
 
+  const mouthWidth = distance(points[61], points[291]);
+
+  // Canthal tilt: positive when the outer eye corner sits above the inner one.
+  // Averaging the two eyes cancels head roll, because a roll raises one eye's
+  // outer corner by exactly what it lowers the other's.
+  const leftTilt = (points[133]?.y ?? 0) - (points[33]?.y ?? 0);
+  const rightTilt = (points[362]?.y ?? 0) - (points[263]?.y ?? 0);
+
+  const leftBrowGap = distance(points[105], leftEyeCenter);
+  const rightBrowGap = distance(points[334], rightEyeCenter);
+
   const raw = {
     faceAspect: safeDivide(faceHeight, faceWidth),
-    eyeSpacing: safeDivide(distance(points[133], points[362]), faceWidth),
-    eyeOpenness: safeDivide((leftEyeOpen + rightEyeOpen) / 2, averageEyeWidth),
-    noseWidth: safeDivide(distance(points[98], points[327]), faceWidth),
-    mouthWidth: safeDivide(distance(points[61], points[291]), faceWidth),
+    cheekWidth: safeDivide(distance(points[116], points[345]), faceWidth),
     jawWidth: safeDivide(distance(points[172], points[397]), faceWidth),
-    lowerFace: safeDivide(distance(points[2], points[152]), faceHeight)
+    lowerFace: safeDivide(distance(points[2], points[152]), faceHeight),
+    foreheadHeight: safeDivide(distance(points[10], points[9]), faceHeight),
+    eyeOpenness: safeDivide((leftEyeOpen + rightEyeOpen) / 2, averageEyeWidth),
+    eyeSpacing: safeDivide(distance(points[133], points[362]), faceWidth),
+    eyeAngle: safeDivide((leftTilt + rightTilt) / 2, averageEyeWidth),
+    browHeight: safeDivide((leftBrowGap + rightBrowGap) / 2, faceHeight),
+    noseWidth: safeDivide(distance(points[98], points[327]), faceWidth),
+    mouthWidth: safeDivide(mouthWidth, faceWidth),
+    lipThickness: safeDivide(distance(points[0], points[17]), mouthWidth)
   };
 
   const normalized = Object.fromEntries(
@@ -75,65 +98,6 @@ export function measureLandmarks(points) {
       faceCoverage: clamp01(faceWidth * faceHeight * 3.5),
       eyeLineWidth
     }
-  };
-}
-
-const median = (values) => {
-  if (values.length === 0) return 0.5;
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-};
-
-function solveGroup(target, base, donor, metricNames) {
-  const ratios = [];
-  const separations = [];
-  for (const metric of metricNames) {
-    const targetValue = Number(target?.[metric]);
-    const baseValue = Number(base?.[metric]);
-    const donorValue = Number(donor?.[metric]);
-    if (![targetValue, baseValue, donorValue].every(Number.isFinite)) continue;
-    const delta = donorValue - baseValue;
-    if (Math.abs(delta) < 0.03) continue;
-    ratios.push(clamp01((targetValue - baseValue) / delta));
-    separations.push(Math.abs(delta));
-  }
-
-  if (ratios.length === 0) {
-    return { weight: 50, confidence: 0, metricsUsed: 0 };
-  }
-
-  const coverage = ratios.length / metricNames.length;
-  const separation = separations.reduce((sum, value) => sum + value, 0) / separations.length;
-  const confidence = clamp01(coverage * Math.min(1, separation / 0.5));
-  return {
-    weight: median(ratios) * 100,
-    confidence,
-    metricsUsed: ratios.length
-  };
-}
-
-export function weightsFromProfiles(target, base, donor) {
-  const warnings = [];
-  const faceGeometry = solveGroup(target, base, donor, GROUP_METRICS.face_geometry);
-  const eyesBrows = solveGroup(target, base, donor, GROUP_METRICS.eyes_brows);
-
-  if (faceGeometry.metricsUsed === 0 || eyesBrows.metricsUsed === 0) {
-    warnings.push('The donor portraits are too similar in one or more regions, so those weights remain neutral at 50%.');
-  }
-
-  return {
-    groups: {
-      face_type: { weight: 50, confidence: 0, metricsUsed: 0 },
-      face_geometry: faceGeometry,
-      eyes_brows: eyesBrows,
-      makeup_detail: { weight: 50, confidence: 0, metricsUsed: 0 },
-      hair: { weight: 50, confidence: 0, metricsUsed: 0 },
-      body: { weight: 50, confidence: 0, metricsUsed: 0 },
-      skin_finish: { weight: 50, confidence: 0, metricsUsed: 0 },
-      extended: { weight: 50, confidence: 0, metricsUsed: 0 }
-    },
-    warnings
   };
 }
 

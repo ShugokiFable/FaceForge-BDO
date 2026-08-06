@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.7.0 · 2026-08-06
+
+Rebuilt around a measured byte layout and a calibration the user can actually
+supply, replacing the reference-library workflow that could never complete.
+
+### Format map, derived from evidence
+
+- Profiled every byte offset across a corpus of 134 real customization files
+  (124 Customization Album downloads whose filenames carry the class id, 6 player
+  saves, 4 research samples). Decrypt/re-encrypt is byte-identical on all of them.
+- Confirmed the class id lives at plaintext byte **80**: it equals the filename's
+  class prefix in all 124 prefixed files, across 12 distinct classes.
+- Confirmed the character name at byte **8**, UTF-16LE, and read it back as text.
+- Identified the face and body slider region as bytes **98–220**, bounded by a
+  zero run at 221–232. Every varying byte in it stays within 0–100 except three
+  (106, 109, 112) that reach 254; those are marked unclassified and never written.
+
+### Removed the 8-byte block abstraction
+
+- Blocks are the ICE cipher's unit, not the data's. The old schema assigned whole
+  8-byte blocks to features, so editing "face geometry" moved eight unrelated
+  sliders at once. Everything now addresses plaintext bytes directly.
+- Deleted the invented starter regions (`face_geometry: blocks 11-37` and friends).
+  Nothing in the corpus supported those boundaries.
+
+### Photo to preset, honestly
+
+- Create Face no longer needs a "profiled reference library". It measures the
+  photo, then drives each **calibrated** slider from one facial proportion.
+- Added a fixed catalogue of 12 controls — exactly one per proportion the bundled
+  landmarker can measure. No control exists without a measurement behind it.
+- The analyzer now measures cheekbone width, forehead height, eyebrow height,
+  canthal tilt and lip thickness as well as the original seven ratios. Averaging
+  the two eyes' canthal tilt cancels head roll.
+- Uncalibrated sliders, the class, face type, hair, makeup, colours and body are
+  copied from the starting preset byte for byte, so output is always a variant of
+  a preset that already worked in game.
+- The main screen always states how many of the 12 sliders are calibrated. It
+  never implies more.
+
+### Calibration replaces the calibration wizard
+
+- Learn takes a base preset plus one saved with a single slider dragged to
+  maximum, and records which byte moved. It refuses ambiguous diffs and reports
+  the candidates instead of guessing, because a wrong offset would silently
+  corrupt every later preset.
+- The map is stored as `slidermap.json` in local app data, and is seeded from a
+  `slidermap.json` next to the EXE when present, so one person's calibration can
+  ship to everyone.
+
+### Simpler app
+
+- Collapsed seven screens (Create Face, Library, Merge, Laboratory, Calibration,
+  Adjust, Settings) into one: photo, starting preset, Create Preset, save.
+  Calibrate and Merge are collapsed panels beneath it.
+- Merge now mixes only the slider region and refuses cross-class donors outright.
+- Removed the reference catalog, the block laboratory, the block comparer and the
+  block-based blend recipe.
+
 ## 0.6.0 · 2026-08-03
 
 - Replaced ciphertext block swapping with a real decrypted preset engine for BDO version 20 presets.

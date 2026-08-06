@@ -2,8 +2,6 @@ package app
 
 import (
 	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -11,41 +9,24 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ShugokiFable/FaceForge-BDO/internal/calibration"
 	"github.com/ShugokiFable/FaceForge-BDO/internal/preset"
 	"github.com/ShugokiFable/FaceForge-BDO/internal/storage"
 )
 
-type encodedPresetRequest struct {
-	Name string `json:"name,omitempty"`
-	Data string `json:"data"`
-}
-
-type blockInfo struct {
-	Index      int    `json:"index"`
-	Hex        string `json:"hex"`
-	IsDefault  bool   `json:"isDefault"`
-	GroupID    string `json:"groupId,omitempty"`
-	GroupName  string `json:"groupName,omitempty"`
-	Protected  bool   `json:"protected"`
-	Confidence string `json:"confidence,omitempty"`
-}
-
 func (s *server) routes() {
 	s.mux.HandleFunc("/api/status", s.authenticated(requireMethod(http.MethodGet, s.status)))
 	s.mux.HandleFunc("/api/inspect", s.authenticated(requireMethod(http.MethodPost, s.inspect)))
-	s.mux.HandleFunc("/api/compare", s.authenticated(requireMethod(http.MethodPost, s.compare)))
+	s.mux.HandleFunc("/api/generate", s.authenticated(requireMethod(http.MethodPost, s.generate)))
 	s.mux.HandleFunc("/api/blend", s.authenticated(requireMethod(http.MethodPost, s.blend)))
-	s.mux.HandleFunc("/api/calibration/observe", s.authenticated(requireMethod(http.MethodPost, s.observeCalibration)))
-	s.mux.HandleFunc("/api/reference-catalog", s.authenticated(s.referenceCatalog))
+	s.mux.HandleFunc("/api/learn", s.authenticated(requireMethod(http.MethodPost, s.learn)))
+	s.mux.HandleFunc("/api/slidermap", s.authenticated(s.sliderMap))
 	s.mux.HandleFunc("/api/folder/scan", s.authenticated(requireMethod(http.MethodGet, s.scanFolder)))
 	s.mux.HandleFunc("/api/folder/read", s.authenticated(requireMethod(http.MethodPost, s.readPreset)))
 	s.mux.HandleFunc("/api/save", s.authenticated(requireMethod(http.MethodPost, s.savePreset)))
 	s.mux.HandleFunc("/api/shutdown", s.authenticated(requireMethod(http.MethodPost, s.shutdown)))
 
 	if s.config.StaticFS != nil {
-		sub, err := fs.Sub(s.config.StaticFS, ".")
-		if err == nil {
+		if sub, err := fs.Sub(s.config.StaticFS, "."); err == nil {
 			s.mux.Handle("/", http.FileServer(http.FS(sub)))
 			return
 		}
@@ -56,44 +37,24 @@ func (s *server) routes() {
 	})
 }
 
-func (s *server) referenceCatalog(writer http.ResponseWriter, request *http.Request) {
-	switch request.Method {
-	case http.MethodGet:
-		catalog, err := storage.LoadReferenceCatalog(s.config.ReferenceCatalogPath)
-		if err != nil {
-			writeError(writer, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(writer, http.StatusOK, catalog)
-	case http.MethodPost:
-		var catalog storage.ReferenceCatalog
-		if !decodeJSON(writer, request, &catalog) {
-			return
-		}
-		if err := storage.SaveReferenceCatalog(s.config.ReferenceCatalogPath, catalog); err != nil {
-			writeError(writer, http.StatusInternalServerError, err.Error())
-			return
-		}
-		saved, err := storage.LoadReferenceCatalog(s.config.ReferenceCatalogPath)
-		if err != nil {
-			writeError(writer, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(writer, http.StatusOK, saved)
-	default:
-		writer.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
-		writeError(writer, http.StatusMethodNotAllowed, "Method not allowed.")
-	}
-}
-
+// status tells the UI what it can do right now: the fixed control catalogue plus
+// which of those are calibrated. The UI must never claim a control works when it
+// is absent from this list.
 func (s *server) status(writer http.ResponseWriter, _ *http.Request) {
+	sliders, err := s.sliders()
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"name":             ProductName,
 		"version":          Version,
-		"presetVersion":    s.config.Schema.Version,
-		"schemaName":       s.config.Schema.Name,
+		"presetVersion":    preset.SupportedVersion,
 		"customizationDir": s.config.CustomizationDir,
-		"groups":           s.config.Schema.Groups,
+		"controls":         preset.Controls,
+		"metrics":          preset.Metrics(),
+		"calibrations":     sliders.Calibrations,
+		"sliderRegion":     map[string]int{"first": preset.SliderFirst, "last": preset.SliderLast},
 	})
 }
 
@@ -109,8 +70,22 @@ func decodePreset(encoded string) (*preset.Preset, []byte, error) {
 	return parsed, raw, nil
 }
 
+func presetPayload(built *preset.Preset) map[string]any {
+	return map[string]any{
+		"data":          base64.StdEncoding.EncodeToString(built.Bytes()),
+		"sha256":        built.SHA256(),
+		"classId":       int(built.Class()),
+		"characterName": built.Name(),
+	}
+}
+
+// inspect validates a preset the user picked from disk and reports its identity,
+// so the UI never holds bytes it has not proved are a real version 20 preset.
 func (s *server) inspect(writer http.ResponseWriter, request *http.Request) {
-	var input encodedPresetRequest
+	var input struct {
+		Name string `json:"name,omitempty"`
+		Data string `json:"data"`
+	}
 	if !decodeJSON(writer, request, &input) {
 		return
 	}
@@ -119,78 +94,50 @@ func (s *server) inspect(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
-	classBlock, _ := parsed.Block(preset.ClassBlockIndex)
-	faceTypeBlock, _ := parsed.Block(preset.FaceTypeBlockIndex)
-	groupsByBlock := make(map[int]preset.FeatureGroup)
-	for _, group := range s.config.Schema.Groups {
-		for _, index := range group.BlockIndices() {
-			groupsByBlock[index] = group
-		}
-	}
-	blocks := make([]blockInfo, 0, parsed.BlockCount())
-	defaultCount := 0
-	for index := 0; index < parsed.BlockCount(); index++ {
-		block, _ := parsed.Block(index)
-		group := groupsByBlock[index]
-		isDefault := block == preset.DefaultCipherBlock
-		if isDefault {
-			defaultCount++
-		}
-		blocks = append(blocks, blockInfo{
-			Index:      index,
-			Hex:        hex.EncodeToString(block[:]),
-			IsDefault:  isDefault,
-			GroupID:    group.ID,
-			GroupName:  group.Name,
-			Protected:  group.Protected,
-			Confidence: group.Confidence,
-		})
-	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"name":                input.Name,
-		"version":             parsed.Version(),
-		"size":                len(parsed.Bytes()),
-		"blockSize":           preset.BlockSize,
-		"blockCount":          parsed.BlockCount(),
-		"sha256":              parsed.SHA256(),
-		"classFingerprint":    hex.EncodeToString(classBlock[:]),
-		"faceTypeFingerprint": hex.EncodeToString(faceTypeBlock[:]),
-		"defaultBlocks":       defaultCount,
-		"blocks":              blocks,
-	})
+	payload := presetPayload(parsed)
+	payload["name"] = input.Name
+	payload["version"] = parsed.Version()
+	writeJSON(writer, http.StatusOK, payload)
 }
 
-func (s *server) compare(writer http.ResponseWriter, request *http.Request) {
+func (s *server) generate(writer http.ResponseWriter, request *http.Request) {
 	var input struct {
-		Left  string `json:"left"`
-		Right string `json:"right"`
+		Base         string             `json:"base"`
+		Measurements map[string]float64 `json:"measurements"`
+		Strength     float64            `json:"strength"`
+		Name         string             `json:"name,omitempty"`
 	}
 	if !decodeJSON(writer, request, &input) {
 		return
 	}
-	left, _, err := decodePreset(input.Left)
+	base, _, err := decodePreset(input.Base)
 	if err != nil {
-		writeError(writer, http.StatusBadRequest, "Left preset: "+err.Error())
+		writeError(writer, http.StatusBadRequest, "Starting preset: "+err.Error())
 		return
 	}
-	right, _, err := decodePreset(input.Right)
+	sliders, err := s.sliders()
 	if err != nil {
-		writeError(writer, http.StatusBadRequest, "Right preset: "+err.Error())
+		writeError(writer, http.StatusInternalServerError, err.Error())
 		return
 	}
-	comparison, err := preset.Compare(left, right)
+	result, err := preset.Generate(base, input.Measurements, input.Strength, input.Name, sliders)
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, comparison)
+	payload := presetPayload(result.Preset)
+	payload["applied"] = result.Applied
+	payload["skipped"] = result.Skipped
+	payload["warnings"] = result.Warnings
+	writeJSON(writer, http.StatusOK, payload)
 }
 
 func (s *server) blend(writer http.ResponseWriter, request *http.Request) {
 	var input struct {
-		Base   string            `json:"base"`
-		Donors map[string]string `json:"donors"`
-		Recipe preset.Recipe     `json:"recipe"`
+		Base   string  `json:"base"`
+		Donor  string  `json:"donor"`
+		Weight float64 `json:"weight"`
+		Name   string  `json:"name,omitempty"`
 	}
 	if !decodeJSON(writer, request, &input) {
 		return
@@ -200,57 +147,108 @@ func (s *server) blend(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadRequest, "Base preset: "+err.Error())
 		return
 	}
-	donors := make(map[string]*preset.Preset, len(input.Donors))
-	for id, encoded := range input.Donors {
-		donor, _, donorErr := decodePreset(encoded)
-		if donorErr != nil {
-			writeError(writer, http.StatusBadRequest, fmt.Sprintf("Donor %q: %v", id, donorErr))
-			return
-		}
-		donors[id] = donor
+	donor, _, err := decodePreset(input.Donor)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "Donor preset: "+err.Error())
+		return
 	}
-	result, err := preset.Blend(base, donors, input.Recipe, s.config.Schema)
+	result, err := preset.Blend(base, donor, input.Weight, input.Name)
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
-	sidecar, _ := json.MarshalIndent(result, "", "  ")
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"data":          base64.StdEncoding.EncodeToString(result.Preset.Bytes()),
-		"sha256":        result.Preset.SHA256(),
-		"changedBlocks": result.ChangedBlocks,
-		"changedBytes":  result.ChangedBytes,
-		"provenance":    result.Provenance,
-		"warnings":      result.Warnings,
-		"sidecar":       string(sidecar),
-	})
+	payload := presetPayload(result.Preset)
+	payload["changedBytes"] = result.ChangedBytes
+	payload["warnings"] = result.Warnings
+	writeJSON(writer, http.StatusOK, payload)
 }
 
-func (s *server) observeCalibration(writer http.ResponseWriter, request *http.Request) {
+// learn records where one control lives, from a base preset and a second one
+// saved with only that slider dragged to maximum.
+func (s *server) learn(writer http.ResponseWriter, request *http.Request) {
 	var input struct {
-		Before string `json:"before"`
-		After  string `json:"after"`
-		Label  string `json:"label"`
+		ControlID string `json:"controlId"`
+		Base      string `json:"base"`
+		BaseName  string `json:"baseName,omitempty"`
+		Maxed     string `json:"maxed"`
+		MaxedName string `json:"maxedName,omitempty"`
+		Commit    bool   `json:"commit"`
 	}
 	if !decodeJSON(writer, request, &input) {
 		return
 	}
-	before, _, err := decodePreset(input.Before)
+	base, _, err := decodePreset(input.Base)
 	if err != nil {
-		writeError(writer, http.StatusBadRequest, "Before preset: "+err.Error())
+		writeError(writer, http.StatusBadRequest, "Base preset: "+err.Error())
 		return
 	}
-	after, _, err := decodePreset(input.After)
+	maxed, _, err := decodePreset(input.Maxed)
 	if err != nil {
-		writeError(writer, http.StatusBadRequest, "After preset: "+err.Error())
+		writeError(writer, http.StatusBadRequest, "Maxed preset: "+err.Error())
 		return
 	}
-	observation, err := calibration.Observe(before, after, input.Label)
+	result, err := preset.Learn(base, maxed, input.ControlID, input.BaseName, input.MaxedName)
 	if err != nil {
-		writeError(writer, http.StatusBadRequest, err.Error())
+		writeJSON(writer, http.StatusBadRequest, map[string]any{
+			"error":   err.Error(),
+			"status":  http.StatusBadRequest,
+			"changes": result.Changes,
+		})
 		return
 	}
-	writeJSON(writer, http.StatusOK, observation)
+	if input.Commit {
+		sliders, loadErr := s.sliders()
+		if loadErr != nil {
+			writeError(writer, http.StatusInternalServerError, loadErr.Error())
+			return
+		}
+		sliders.Upsert(result.Calibration)
+		if saveErr := preset.SaveSliderMap(s.config.SliderMapPath, sliders); saveErr != nil {
+			writeError(writer, http.StatusInternalServerError, saveErr.Error())
+			return
+		}
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"calibration": result.Calibration,
+		"changes":     result.Changes,
+		"warnings":    result.Warnings,
+		"committed":   input.Commit,
+	})
+}
+
+func (s *server) sliderMap(writer http.ResponseWriter, request *http.Request) {
+	switch request.Method {
+	case http.MethodGet:
+		sliders, err := s.sliders()
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(writer, http.StatusOK, sliders)
+	case http.MethodDelete:
+		controlID := strings.TrimSpace(request.URL.Query().Get("controlId"))
+		if controlID == "" {
+			writeError(writer, http.StatusBadRequest, "controlId is required.")
+			return
+		}
+		sliders, err := s.sliders()
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !sliders.Remove(controlID) {
+			writeError(writer, http.StatusNotFound, fmt.Sprintf("%q is not calibrated.", controlID))
+			return
+		}
+		if err := preset.SaveSliderMap(s.config.SliderMapPath, sliders); err != nil {
+			writeError(writer, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(writer, http.StatusOK, sliders)
+	default:
+		writer.Header().Set("Allow", http.MethodGet+", "+http.MethodDelete)
+		writeError(writer, http.StatusMethodNotAllowed, "Method not allowed.")
+	}
 }
 
 func (s *server) scanFolder(writer http.ResponseWriter, request *http.Request) {
@@ -284,12 +282,10 @@ func (s *server) readPreset(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"name":   filepath.Base(path),
-		"path":   path,
-		"data":   base64.StdEncoding.EncodeToString(data),
-		"sha256": parsed.SHA256(),
-	})
+	payload := presetPayload(parsed)
+	payload["name"] = filepath.Base(path)
+	payload["path"] = path
+	writeJSON(writer, http.StatusOK, payload)
 }
 
 func (s *server) savePreset(writer http.ResponseWriter, request *http.Request) {

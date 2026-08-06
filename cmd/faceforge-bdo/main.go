@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,9 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	schemaassets "github.com/ShugokiFable/FaceForge-BDO/assets/schema"
 	"github.com/ShugokiFable/FaceForge-BDO/internal/app"
-	"github.com/ShugokiFable/FaceForge-BDO/internal/preset"
 	"github.com/ShugokiFable/FaceForge-BDO/internal/storage"
 	webassets "github.com/ShugokiFable/FaceForge-BDO/web"
 )
@@ -47,19 +44,36 @@ func applicationURL(address, token string) string {
 	return fmt.Sprintf("http://%s/#token=%s", address, token)
 }
 
-func loadSchema() (preset.Schema, error) {
-	data, err := schemaassets.FS.ReadFile("version20.json")
+// resolveSliderMapPath returns the writable slider map path. A calibration is
+// expensive to produce, so if the user has none yet but shipped one next to the
+// EXE, that is seeded in: it lets one person's 12 saves serve everybody.
+func resolveSliderMapPath(logger *log.Logger) string {
+	dataDir := localDataDir()
+	if dataDir == "" {
+		return ""
+	}
+	target := filepath.Join(dataDir, "slidermap.json")
+	if _, err := os.Stat(target); err == nil {
+		return target
+	}
+	executable, err := os.Executable()
 	if err != nil {
-		return preset.Schema{}, fmt.Errorf("read embedded preset schema: %w", err)
+		return target
 	}
-	var schema preset.Schema
-	if err := json.Unmarshal(data, &schema); err != nil {
-		return preset.Schema{}, fmt.Errorf("decode embedded preset schema: %w", err)
+	seed := filepath.Join(filepath.Dir(executable), "slidermap.json")
+	data, err := os.ReadFile(seed)
+	if err != nil {
+		return target
 	}
-	if err := schema.Validate(); err != nil {
-		return preset.Schema{}, err
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return target
 	}
-	return schema, nil
+	if err := os.WriteFile(target, data, 0o600); err != nil {
+		logger.Printf("could not seed slider map from %s: %v", seed, err)
+		return target
+	}
+	logger.Printf("seeded slider map from %s", seed)
+	return target
 }
 
 func localDataDir() string {
@@ -124,11 +138,7 @@ func main() {
 	defer closeLog()
 	logger := log.New(output, "FaceForge BDO: ", log.Ldate|log.Ltime|log.Lmicroseconds|log.LUTC)
 
-	schema, err := loadSchema()
-	if err != nil {
-		reportFatal(logger, headless, err)
-		return
-	}
+	var err error
 	if strings.TrimSpace(customizationDir) == "" {
 		customizationDir, err = storage.DiscoverCustomizationDir()
 		if err != nil {
@@ -150,16 +160,12 @@ func main() {
 	defer listener.Close()
 
 	shutdownRequested := make(chan struct{}, 1)
-	referenceCatalogPath := ""
-	if dataDir := localDataDir(); dataDir != "" {
-		referenceCatalogPath = filepath.Join(dataDir, "reference-catalog.json")
-	}
+	sliderMapPath := resolveSliderMapPath(logger)
 	handler := app.NewHandler(app.Config{
-		Token:                token,
-		Schema:               schema,
-		CustomizationDir:     filepath.Clean(customizationDir),
-		ReferenceCatalogPath: referenceCatalogPath,
-		StaticFS:             webassets.FS,
+		Token:            token,
+		CustomizationDir: filepath.Clean(customizationDir),
+		SliderMapPath:    sliderMapPath,
+		StaticFS:         webassets.FS,
 		Shutdown: func() {
 			select {
 			case shutdownRequested <- struct{}{}:

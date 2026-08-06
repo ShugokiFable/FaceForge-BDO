@@ -23,17 +23,20 @@ func appFixture(t *testing.T, name string) []byte {
 	return data
 }
 
-func appSchema(t *testing.T) preset.Schema {
+func encodedFixture(t *testing.T, name string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "assets", "schema", "version20.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var schema preset.Schema
-	if err := json.Unmarshal(data, &schema); err != nil {
-		t.Fatal(err)
-	}
-	return schema
+	return base64.StdEncoding.EncodeToString(appFixture(t, name))
+}
+
+// testHandler builds a handler with a throwaway slider map, so calibration in one
+// test never leaks into another.
+func testHandler(t *testing.T) http.Handler {
+	t.Helper()
+	return NewHandler(Config{
+		Token:            "secret",
+		CustomizationDir: t.TempDir(),
+		SliderMapPath:    filepath.Join(t.TempDir(), "slidermap.json"),
+	})
 }
 
 func request(t *testing.T, handler http.Handler, method, path, token string, body any) *httptest.ResponseRecorder {
@@ -58,168 +61,232 @@ func request(t *testing.T, handler http.Handler, method, path, token string, bod
 	return recorder
 }
 
+func decodeBody(t *testing.T, response *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode body %q: %v", response.Body.String(), err)
+	}
+	return payload
+}
+
 func TestAPIRejectsMissingToken(t *testing.T) {
-	handler := NewHandler(Config{Token: "secret", Schema: appSchema(t), CustomizationDir: t.TempDir()})
-	response := request(t, handler, http.MethodGet, "/api/status", "", nil)
+	response := request(t, testHandler(t), http.MethodGet, "/api/status", "", nil)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body=%s", response.Code, response.Body.String())
 	}
 }
 
-func TestStatusReturnsVersionAndSchema(t *testing.T) {
-	handler := NewHandler(Config{Token: "secret", Schema: appSchema(t), CustomizationDir: t.TempDir()})
-	response := request(t, handler, http.MethodGet, "/api/status", "secret", nil)
+func TestStatusAdvertisesControlsAndCalibrations(t *testing.T) {
+	response := request(t, testHandler(t), http.MethodGet, "/api/status", "secret", nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
+	payload := decodeBody(t, response)
+	if payload["name"] != ProductName || payload["version"] != Version {
+		t.Fatalf("unexpected identity in status: %+v", payload)
 	}
-	if payload["name"] != "FaceForge BDO" || payload["version"] != "0.5.2" {
-		t.Fatalf("unexpected status payload: %+v", payload)
+	controls, ok := payload["controls"].([]any)
+	if !ok || len(controls) != len(preset.Controls) {
+		t.Fatalf("controls = %v, want %d entries", payload["controls"], len(preset.Controls))
+	}
+	// A fresh install must report zero calibrations rather than implying the
+	// photo matching already works.
+	if calibrations, _ := payload["calibrations"].([]any); len(calibrations) != 0 {
+		t.Fatalf("a fresh slider map reported %d calibrations", len(calibrations))
 	}
 }
 
-func TestInspectReturnsBlockMetadata(t *testing.T) {
-	handler := NewHandler(Config{Token: "secret", Schema: appSchema(t), CustomizationDir: t.TempDir()})
-	response := request(t, handler, http.MethodPost, "/api/inspect", "secret", map[string]string{
-		"data": base64.StdEncoding.EncodeToString(appFixture(t, "Cute Lahn")),
-		"name": "Cute Lahn",
-	})
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
-	}
-	var payload struct {
-		Version          uint32 `json:"version"`
-		BlockCount       int    `json:"blockCount"`
-		ClassFingerprint string `json:"classFingerprint"`
-		Blocks           []any  `json:"blocks"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.Version != 20 || payload.BlockCount != 115 || len(payload.Blocks) != 115 {
-		t.Fatalf("unexpected inspect payload: %+v", payload)
-	}
-	if payload.ClassFingerprint != "1095d5067c485fc5" {
-		t.Fatalf("class fingerprint = %q", payload.ClassFingerprint)
-	}
-}
+// The full path the user takes: learn one slider, then generate from a photo.
+func TestLearnThenGenerate(t *testing.T) {
+	handler := testHandler(t)
 
-func TestBlendEndpointReturnsValidPresetAndPreservesClass(t *testing.T) {
-	handler := NewHandler(Config{Token: "secret", Schema: appSchema(t), CustomizationDir: t.TempDir()})
-	response := request(t, handler, http.MethodPost, "/api/blend", "secret", map[string]any{
-		"base": base64.StdEncoding.EncodeToString(appFixture(t, "Cute Lahn")),
-		"donors": map[string]string{
-			"demure": base64.StdEncoding.EncodeToString(appFixture(t, "Demure Lahn")),
-		},
-		"recipe": map[string]any{
-			"seed":   "api-test",
-			"groups": []map[string]any{{"groupId": "face_geometry", "donorId": "demure", "weight": 50}},
-		},
-	})
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
-	}
-	var payload struct {
-		Data string `json:"data"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := base64.StdEncoding.DecodeString(payload.Data)
+	base, err := preset.Parse(appFixture(t, "Cute Lahn"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	generated, err := preset.Parse(raw)
+	// Stand in for a save made after dragging one slider to maximum.
+	plain := base.Edit()
+	target := -1
+	for offset := preset.SliderFirst; offset <= preset.SliderLast; offset++ {
+		if !preset.IsSlider(offset) {
+			continue
+		}
+		if plain[offset] < 50 {
+			target = offset
+			break
+		}
+	}
+	if target < 0 {
+		t.Fatal("no slider below 50 in the fixture")
+	}
+	plain[target] = 100
+	maxed, err := preset.FromPlain(plain)
 	if err != nil {
 		t.Fatal(err)
 	}
-	basePreset, _ := preset.Parse(appFixture(t, "Cute Lahn"))
-	generatedClass, _ := generated.Block(preset.ClassBlockIndex)
-	baseClass, _ := basePreset.Block(preset.ClassBlockIndex)
-	if generatedClass != baseClass {
-		t.Fatal("blend endpoint changed class identity")
-	}
-}
 
-func TestBlendEndpointSerializesNoChangesAsEmptyArray(t *testing.T) {
-	handler := NewHandler(Config{Token: "secret", Schema: appSchema(t), CustomizationDir: t.TempDir()})
-	data := base64.StdEncoding.EncodeToString(appFixture(t, "Cute Lahn"))
-	response := request(t, handler, http.MethodPost, "/api/blend", "secret", map[string]any{
-		"base": data,
-		"donors": map[string]string{
-			"base-profile": data,
-		},
-		"recipe": map[string]any{
-			"seed": "same-preset-test",
-			"groups": []map[string]any{
-				{"groupId": "face_geometry", "donorId": "base-profile", "weight": 100},
-				{"groupId": "eyes_brows", "donorId": "base-profile", "weight": 100},
-			},
-		},
+	learn := request(t, handler, http.MethodPost, "/api/learn", "secret", map[string]any{
+		"controlId": "nose_width",
+		"base":      encodedFixture(t, "Cute Lahn"),
+		"baseName":  "base",
+		"maxed":     base64.StdEncoding.EncodeToString(maxed.Bytes()),
+		"maxedName": "nose maxed",
+		"commit":    true,
 	})
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+	if learn.Code != http.StatusOK {
+		t.Fatalf("learn status = %d; body=%s", learn.Code, learn.Body.String())
 	}
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+	calibration, _ := decodeBody(t, learn)["calibration"].(map[string]any)
+	if got := int(calibration["offset"].(float64)); got != target {
+		t.Fatalf("learned offset %d, want %d", got, target)
+	}
+
+	// The calibration must be live for the very next request.
+	status := decodeBody(t, request(t, handler, http.MethodGet, "/api/status", "secret", nil))
+	if calibrations, _ := status["calibrations"].([]any); len(calibrations) != 1 {
+		t.Fatalf("status reports %d calibrations after learning one", len(calibrations))
+	}
+
+	generate := request(t, handler, http.MethodPost, "/api/generate", "secret", map[string]any{
+		"base":         encodedFixture(t, "Cute Lahn"),
+		"measurements": map[string]float64{"noseWidth": 1},
+		"strength":     1,
+		"name":         "Nakamoora",
+	})
+	if generate.Code != http.StatusOK {
+		t.Fatalf("generate status = %d; body=%s", generate.Code, generate.Body.String())
+	}
+	payload := decodeBody(t, generate)
+	if payload["characterName"] != "Nakamoora" {
+		t.Fatalf("characterName = %v, want Nakamoora", payload["characterName"])
+	}
+	if applied, _ := payload["applied"].([]any); len(applied) != 1 {
+		t.Fatalf("applied = %d controls, want 1", len(applied))
+	}
+	built, err := base64.StdEncoding.DecodeString(payload["data"].(string))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if string(payload["changedBlocks"]) != "[]" {
-		t.Fatalf("changedBlocks JSON = %s, want []", payload["changedBlocks"])
+	parsed, err := preset.Parse(built)
+	if err != nil {
+		t.Fatalf("the API returned a preset that does not parse: %v", err)
+	}
+	if got, _ := parsed.Slider(target); got != 100 {
+		t.Fatalf("generated slider %d = %d, want 100", target, got)
+	}
+	if got, want := parsed.Class(), base.Class(); got != want {
+		t.Fatalf("generate changed the class to %d, want %d", got, want)
 	}
 }
 
-func TestAPIRejectsWrongMethod(t *testing.T) {
-	handler := NewHandler(Config{Token: "secret", Schema: appSchema(t), CustomizationDir: t.TempDir()})
-	response := request(t, handler, http.MethodGet, "/api/inspect", "secret", nil)
-	if response.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d, want 405", response.Code)
+func TestGenerateWithoutCalibrationIsRejected(t *testing.T) {
+	response := request(t, testHandler(t), http.MethodPost, "/api/generate", "secret", map[string]any{
+		"base":         encodedFixture(t, "Cute Lahn"),
+		"measurements": map[string]float64{"noseWidth": 1},
+		"strength":     1,
+	})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
 	}
 }
 
-func TestReferenceCatalogAPIStoresProfilesOnDisk(t *testing.T) {
-	catalogPath := filepath.Join(t.TempDir(), "reference-catalog.json")
+// An ambiguous diff must surface the candidates instead of committing a guess.
+func TestLearnAmbiguousDiffReportsCandidates(t *testing.T) {
+	handler := testHandler(t)
+	base, err := preset.Parse(appFixture(t, "Cute Lahn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := base.Edit()
+	changed := 0
+	for offset := preset.SliderFirst; offset <= preset.SliderLast && changed < 2; offset++ {
+		if !preset.IsSlider(offset) || plain[offset] >= 50 {
+			continue
+		}
+		plain[offset] = 100
+		changed++
+	}
+	maxed, err := preset.FromPlain(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := request(t, handler, http.MethodPost, "/api/learn", "secret", map[string]any{
+		"controlId": "nose_width",
+		"base":      encodedFixture(t, "Cute Lahn"),
+		"maxed":     base64.StdEncoding.EncodeToString(maxed.Bytes()),
+		"commit":    true,
+	})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
+	}
+	if changes, _ := decodeBody(t, response)["changes"].([]any); len(changes) != 2 {
+		t.Fatalf("changes = %d, want the 2 candidates reported back", len(changes))
+	}
+	// Nothing may have been persisted.
+	status := decodeBody(t, request(t, handler, http.MethodGet, "/api/status", "secret", nil))
+	if calibrations, _ := status["calibrations"].([]any); len(calibrations) != 0 {
+		t.Fatal("an ambiguous learn was committed anyway")
+	}
+}
+
+func TestBlendRejectsCrossClass(t *testing.T) {
+	response := request(t, testHandler(t), http.MethodPost, "/api/blend", "secret", map[string]any{
+		"base":   encodedFixture(t, "Cute Lahn"),
+		"donor":  encodedFixture(t, "Mommy Guardian"),
+		"weight": 0.5,
+	})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestSaveWritesValidatedPresetAndBacksUp(t *testing.T) {
+	directory := t.TempDir()
 	handler := NewHandler(Config{
-		Token:                "secret",
-		Schema:               appSchema(t),
-		CustomizationDir:     t.TempDir(),
-		ReferenceCatalogPath: catalogPath,
+		Token:            "secret",
+		CustomizationDir: directory,
+		SliderMapPath:    filepath.Join(t.TempDir(), "slidermap.json"),
 	})
-	payload := map[string]any{
-		"version": 1,
-		"profiles": map[string]any{
-			"ABCDEF": map[string]any{
-				"sha256":           "ABCDEF",
-				"name":             "Striker Reference",
-				"classFingerprint": "class-one",
-				"imageName":        "striker.png",
-				"metrics":          map[string]float64{"jawWidth": 0.62},
-				"quality":          map[string]float64{"symmetry": 0.91},
-			},
-		},
+	body := map[string]any{"filename": "Test Face", "data": encodedFixture(t, "Cute Lahn")}
+
+	first := request(t, handler, http.MethodPost, "/api/save", "secret", body)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first save = %d; body=%s", first.Code, first.Body.String())
 	}
-	response := request(t, handler, http.MethodPost, "/api/reference-catalog", "secret", payload)
-	if response.Code != http.StatusOK {
-		t.Fatalf("save status = %d; body=%s", response.Code, response.Body.String())
-	}
-	response = request(t, handler, http.MethodGet, "/api/reference-catalog", "secret", nil)
-	if response.Code != http.StatusOK {
-		t.Fatalf("load status = %d; body=%s", response.Code, response.Body.String())
-	}
-	var loaded struct {
-		Profiles map[string]struct {
-			SHA256 string `json:"sha256"`
-			Name   string `json:"name"`
-		} `json:"profiles"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &loaded); err != nil {
+	written, err := os.ReadFile(filepath.Join(directory, "Test Face"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	profile, ok := loaded.Profiles["abcdef"]
-	if !ok || profile.SHA256 != "abcdef" || profile.Name != "Striker Reference" {
-		t.Fatalf("unexpected catalog response: %+v", loaded.Profiles)
+	if !bytes.Equal(written, appFixture(t, "Cute Lahn")) {
+		t.Fatal("saved file does not match the bytes supplied")
+	}
+
+	second := request(t, handler, http.MethodPost, "/api/save", "secret", body)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second save = %d; body=%s", second.Code, second.Body.String())
+	}
+	if backup, _ := decodeBody(t, second)["backupPath"].(string); backup == "" {
+		t.Fatal("overwriting an existing preset did not produce a backup")
+	}
+}
+
+func TestSaveRejectsCorruptData(t *testing.T) {
+	response := request(t, testHandler(t), http.MethodPost, "/api/save", "secret", map[string]any{
+		"filename": "Broken",
+		"data":     base64.StdEncoding.EncodeToString([]byte("not a preset")),
+	})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestSaveRejectsPathTraversal(t *testing.T) {
+	response := request(t, testHandler(t), http.MethodPost, "/api/save", "secret", map[string]any{
+		"filename": filepath.Join("..", "escaped"),
+		"data":     encodedFixture(t, "Cute Lahn"),
+	})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
 	}
 }

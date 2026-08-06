@@ -1,994 +1,546 @@
-import { apiGet, apiPost, hasToken, setToken } from './api.js';
+import { apiGet, apiPost, api, hasToken } from './api.js';
 import { analyzeFaceImage } from './face-analysis.js';
-import { buildAutomaticPlan, assertUsefulBlendResult } from './create-face.js';
-import {
-  calibrationMerge,
-  createInitialState,
-  recipeFromState,
-  saveCalibration,
-  saveReferenceCatalog,
-  upsertReferenceProfile,
-  removeReferenceProfile
-} from './state.js';
-import {
-  base64ToBytes,
-  downloadBytes,
-  downloadText,
-  readPresetFile,
-  safeFilename
-} from './file-utils.js';
+import { base64ToBytes, readPresetFile, downloadBytes, safeFilename } from './file-utils.js';
 
-const root = document.querySelector('#app');
-let state;
-let selectedBlock = null;
-let toastCounter = 0;
-let createFaceAbortController = null;
+const root = document.getElementById('app');
 
-const nav = [
-  ['create', 'Create Face', 'image'],
-  ['library', 'Preset Library', 'folder'],
-  ['tools', 'More Tools', 'tools'],
-  ['settings', 'Settings', 'settings']
-];
-
-const icons = {
-  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 4.5-4.5 3 3 2-2 6.5 6.5"/></svg>',
-  merge: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 6h5a4 4 0 0 1 0 8H8"/><path d="M16 18H11a4 4 0 0 1 0-8h5"/><path d="M10 12h4"/></svg>',
-  folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"/></svg>',
-  tools: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14.7 6.3a4 4 0 1 0 3 3l3.8 3.8-2.6 2.6-3.8-3.8a4 4 0 0 0-5.4-5.4l2.1 2.1-2.2 2.2-2.1-2.1a4 4 0 0 0 5.4 5.4"/></svg>',
-  settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.07A1.7 1.7 0 0 0 9 19.37a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.07 14H3v-4h.07A1.7 1.7 0 0 0 4.63 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63 1.7 1.7 0 0 0 10 3.07V3h4v.07A1.7 1.7 0 0 0 15 4.63a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9 1.7 1.7 0 0 0 20.93 10H21v4h-.07A1.7 1.7 0 0 0 19.4 15z"/></svg>',
-  power: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2v10M6.3 5.8a8 8 0 1 0 11.4 0"/></svg>',
-  inspect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10 4H4v6"/><path d="M14 20h6v-6"/><path d="M20 10V4h-6"/><path d="M4 14v6h6"/><path d="m9 9 6 6"/></svg>'
+const state = {
+  status: null,
+  library: { presets: [], warnings: [], loading: false },
+  photo: null,       // { preview, loading, error, measurements }
+  base: null,        // { name, data, classId, characterName }
+  strength: 70,
+  outputName: 'FaceForge Face',
+  result: null,      // { data, applied, skipped, warnings, sha256 }
+  panel: null,       // 'calibrate' | 'merge' | null
+  calibrate: { base: null, busy: '', error: '', lastLearned: null },
+  merge: { donor: null, weight: 50, result: null },
+  toasts: []
 };
 
 const escapeHTML = (value) => String(value ?? '')
-  .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-  .replaceAll('"', '&quot;').replaceAll("'", '&#039;');
-const shortHash = (hash) => hash ? `${hash.slice(0, 10)}…${hash.slice(-6)}` : 'Unknown';
-const confidenceLabel = (value) => value >= .75 ? 'High' : value >= .35 ? 'Medium' : 'Low';
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+const percent = (value) => `${Math.round(Number(value ?? 0) * 100)}%`;
+
+let toastSequence = 0;
 
 function toast(message, type = 'info') {
-  const stack = document.querySelector('.toast-stack') ?? (() => {
-    const node = document.createElement('div');
-    node.className = 'toast-stack';
-    document.body.append(node);
-    return node;
-  })();
-  const item = document.createElement('div');
-  item.className = `toast ${type}`;
-  item.dataset.toastId = String(++toastCounter);
-  item.textContent = message;
-  stack.append(item);
-  setTimeout(() => item.remove(), 4800);
+  const entry = { id: (toastSequence += 1), message, type };
+  state.toasts.push(entry);
+  render();
+  setTimeout(() => {
+    state.toasts = state.toasts.filter((item) => item.id !== entry.id);
+    render();
+  }, 5200);
 }
 
-function addActivity(message, type = 'info') {
-  state.activity.unshift({ message, type, at: new Date().toISOString() });
-  state.activity = state.activity.slice(0, 20);
+const controls = () => state.status?.controls ?? [];
+const calibrations = () => state.status?.calibrations ?? [];
+const calibrationFor = (id) => calibrations().find((entry) => entry.controlId === id) ?? null;
+const calibratedCount = () => calibrations().length;
+
+// ---------------------------------------------------------------- rendering
+
+function toastStack() {
+  if (state.toasts.length === 0) return '';
+  return `<div class="toast-stack">${state.toasts
+    .map((item) => `<div class="toast ${item.type === 'error' ? 'error' : item.type === 'success' ? 'success' : ''}">${escapeHTML(item.message)}</div>`)
+    .join('')}</div>`;
 }
 
-function activeSidebarView() {
-  return ['merge', 'lab', 'calibration'].includes(state.activeView) ? 'tools' : state.activeView;
-}
+function photoPanel() {
+  const photo = state.photo;
+  let badge = '';
+  if (photo?.loading) badge = 'Analyzing on this PC…';
+  else if (photo?.error) badge = photo.error;
+  else if (photo) badge = `${percent(photo.measurements.quality.symmetry)} symmetry`;
 
-function viewHeader(title, description, actions = '') {
-  return `<div class="view-header"><div class="view-title"><h1>${escapeHTML(title)}</h1><p>${escapeHTML(description)}</p></div><div class="header-actions">${actions}</div></div>`;
-}
-
-function panelLink(title, body, view, buttonLabel = 'Open') {
-  return `<div class="panel home-card"><div class="panel-body stack"><div class="home-card-copy"><h3>${escapeHTML(title)}</h3><p>${escapeHTML(body)}</p></div><button class="button primary" data-nav="${escapeHTML(view)}">${escapeHTML(buttonLabel)}</button></div></div>`;
-}
-
-function workflowSteps(items) {
-  return `<div class="step-list compact">${items.map((item, index) => `<div class="step-item"><div class="step-number">${index + 1}</div><div><strong>${escapeHTML(item.title)}</strong><span>${escapeHTML(item.text)}</span></div></div>`).join('')}</div>`;
-}
-
-function compactProgress(stage) {
-  const order = ['input', 'processing', 'result'];
-  const currentIndex = order.indexOf(stage === 'reference-required' ? 'input' : stage);
-  const labels = [
-    ['input', 'Photo'],
-    ['processing', 'Preset'],
-    ['result', 'Result']
-  ];
-  return `<div class="progress-strip">${labels.map(([id, label], index) => {
-    const isActive = stage === id || (id === 'input' && stage === 'reference-required');
-    const isComplete = currentIndex > index;
-    return `<div class="progress-pill ${isActive ? 'active' : ''} ${isComplete ? 'complete' : ''}"><span>${index + 1}</span>${escapeHTML(label)}</div>`;
-  }).join('')}</div>`;
-}
-
-function metricGrid(metrics) {
-  const labels = {
-    faceAspect: 'Face aspect', eyeSpacing: 'Eye spacing', eyeOpenness: 'Eye openness',
-    noseWidth: 'Nose width', mouthWidth: 'Mouth width', jawWidth: 'Jaw width', lowerFace: 'Lower face'
-  };
-  return `<div class="metric-grid">${Object.entries(metrics).map(([key, value]) => `<div class="metric"><div class="metric-head"><span class="metric-name">${labels[key] ?? key}</span><span class="metric-value">${Math.round(value * 100)}%</span></div><div class="meter"><span style="width:${Math.round(value * 100)}%"></span></div></div>`).join('')}</div>`;
-}
-
-function portraitPanel(slot, title, subtitle, detailsCollapsed = true) {
-  const portrait = state.portraits[slot];
-  const metrics = portrait?.analysis?.measurements?.normalized;
   return `<div class="panel">
-    <div class="panel-header"><div><div class="panel-title">${escapeHTML(title)}</div><div class="panel-subtitle">${escapeHTML(subtitle)}</div></div>${portrait ? `<button class="button ghost compact" data-clear-portrait="${slot}">Clear</button>` : ''}</div>
+    <div class="panel-header">
+      <div><div class="panel-title">1 · Target photo</div><div class="panel-subtitle">Front-facing, neutral expression, whole face visible</div></div>
+      ${photo ? '<button class="button ghost compact" data-action="clear-photo">Clear</button>' : ''}
+    </div>
     <div class="panel-body stack compact-gap">
-      <label class="portrait-box" data-drop-portrait="${slot}">
-        <input class="hidden" type="file" accept="image/*" data-portrait-input="${slot}">
-        ${portrait ? `<img src="${portrait.preview}" alt="Analyzed portrait"><span class="portrait-badge">${portrait.loading ? 'Analyzing locally…' : portrait.error ? escapeHTML(portrait.error) : `${Math.round((portrait.analysis?.measurements?.quality?.symmetry ?? 0) * 100)}% symmetry`}</span>` : `<div class="portrait-empty"><strong>Choose an image</strong><br>Front-facing, neutral expression, full face visible</div>`}
+      <label class="dropzone compact-drop">
+        <input type="file" accept="image/*" class="hidden" data-input="photo">
+        ${photo
+          ? `<div class="portrait-box"><img src="${photo.preview}" alt="Target face"><span class="portrait-badge">${escapeHTML(badge)}</span></div>`
+          : '<div class="portrait-empty"><strong>Choose a photo</strong><br>or drag one onto this box</div>'}
       </label>
-      ${metrics ? (detailsCollapsed ? `<details class="details-card"><summary>Image details</summary>${metricGrid(metrics)}</details>` : metricGrid(metrics)) : ''}
+      ${photo?.measurements ? measurementList(photo.measurements) : ''}
     </div>
   </div>`;
 }
 
-function presetCard(slot, title, subtitle) {
-  const item = state.presets[slot];
+function measurementList(measurements) {
+  const rows = controls().map((control) => {
+    const value = measurements.normalized[control.metric];
+    if (!Number.isFinite(value)) return '';
+    return `<div class="slider-row">
+      <span class="slider-label">${escapeHTML(control.label)}</span>
+      <div class="meter"><span style="width:${Math.round(value * 100)}%"></span></div>
+      <span class="slider-value mono">${Math.round(value * 100)}</span>
+    </div>`;
+  }).join('');
+  return `<details class="details-card"><summary>Measured proportions</summary><div class="stack compact-gap">${rows}</div></details>`;
+}
+
+function presetOption(item) {
+  const selected = state.base?.path === item.path ? ' selected' : '';
+  const who = item.characterName ? ` — ${item.characterName}` : '';
+  return `<option value="${escapeHTML(item.path)}"${selected}>${escapeHTML(item.name)}${escapeHTML(who)} (class ${item.classId})</option>`;
+}
+
+function basePanel() {
+  const { presets, loading, warnings } = state.library;
   return `<div class="panel">
-    <div class="panel-header"><div><div class="panel-title">${escapeHTML(title)}</div><div class="panel-subtitle">${escapeHTML(subtitle)}</div></div>${item ? `<button class="button ghost compact" data-clear-preset="${slot}">Clear</button>` : ''}</div>
-    <div class="panel-body">
-      <label class="dropzone compact-drop" data-drop-preset="${slot}">
-        <input type="file" data-preset-input="${slot}">
-        ${item ? `<div class="file-card"><div class="file-glyph">BDO</div><div class="file-meta"><strong>${escapeHTML(item.name)}</strong><span>${renderPresetSummary(item)}</span></div><span class="muted">Change</span></div>` : `<div><strong>Drop a BDO preset here</strong><small>Or click to choose a 924-byte customization file</small></div>`}
+    <div class="panel-header">
+      <div><div class="panel-title">2 · Starting preset</div><div class="panel-subtitle">A preset that already works in game. Its class, hair, makeup and colours are kept.</div></div>
+      <button class="button ghost compact" data-action="scan-library">${loading ? 'Scanning…' : 'Rescan'}</button>
+    </div>
+    <div class="panel-body stack compact-gap">
+      <div class="field">
+        <label>From your Black Desert folder</label>
+        <select class="input" data-input="base-select">
+          <option value="">${presets.length ? 'Choose a preset…' : 'No presets found in that folder'}</option>
+          ${presets.map(presetOption).join('')}
+        </select>
+      </div>
+      <label class="button ghost">
+        <input type="file" class="hidden" data-input="base-file">Or pick a preset file…
       </label>
+      ${state.base
+        ? `<div class="file-card"><div class="file-glyph">BD</div><div class="file-meta"><strong>${escapeHTML(state.base.name)}</strong><span>class ${state.base.classId}${state.base.characterName ? ` · saved as ${escapeHTML(state.base.characterName)}` : ''}</span></div></div>`
+        : ''}
+      ${warnings.length ? `<details class="details-card"><summary>${warnings.length} file(s) skipped</summary><div class="stack compact-gap mono faint">${warnings.map((line) => escapeHTML(line)).join('<br>')}</div></details>` : ''}
     </div>
   </div>`;
 }
 
-function renderPresetSummary(item) {
-  const profile = getProfileForPreset(item);
-  const classLabel = item.inspect?.classFingerprint ? shortHash(item.inspect.classFingerprint) : 'Unknown class';
-  const profiled = profile ? '· library profile ready' : '· no screenshot profile';
-  return `v${item.inspect?.version ?? '?'} · ${classLabel} ${profiled}`;
-}
-
-function outputFileName() {
-  return safeFilename(state.settings.outputFilename || state.createFace.result?.name || 'FaceForge BDO Preset');
-}
-
-function createDisabledReason() {
-  if (state.createFace.stage === 'processing') return 'FaceForge is already building a result.';
-  if (!state.portraits.target?.analysis) return 'Add a target photo.';
-  if (!state.presets.base) return 'Add a starting preset.';
-  const referenceInfo = sameClassProfileSummary();
-  if (!referenceInfo.ready) return 'Profile a different same-class preset in Preset Library.';
-  return '';
-}
-
-function formatDuration(durationMs) {
-  if (!Number.isFinite(durationMs) || durationMs <= 0) return '—';
-  if (durationMs < 1000) return `${Math.max(1, Math.round(durationMs))} ms`;
-  return `${(durationMs / 1000).toFixed(durationMs >= 10000 ? 0 : 1)} s`;
-}
-
-function sameClassProfileSummary() {
-  if (!state.presets.base?.inspect?.classFingerprint) {
-    return { extras: 0, baseProfile: null, ready: false };
+// calibrationBanner is the app's honesty surface: it must always say exactly how
+// many sliders FaceForge can actually drive, never imply more.
+function calibrationBanner() {
+  const done = calibratedCount();
+  const total = controls().length;
+  if (done === 0) {
+    return `<div class="callout warning">
+      <strong>Photo matching needs calibration first.</strong> None of the ${total} sliders are mapped yet, so FaceForge does not know which byte in a BDO preset is the nose width.
+      Teach it once — about five minutes in the character creator — and it stays mapped.
+      <div class="row-actions"><button class="button primary" data-action="open-calibrate">Calibrate sliders</button></div>
+    </div>`;
   }
-  const baseClass = state.presets.base.inspect.classFingerprint;
-  const baseSha = String(state.presets.base.inspect.sha256 ?? '').toLowerCase();
-  const baseProfile = getProfileForPreset(state.presets.base);
-  let extras = 0;
-  for (const item of state.library.items) {
-    if (item.classFingerprint !== baseClass) continue;
-    if (!getProfileForPreset(item)) continue;
-    if (String(item.sha256 ?? '').toLowerCase() === baseSha) continue;
-    extras += 1;
+  if (done < total) {
+    return `<div class="callout">
+      <strong>${done} of ${total} sliders calibrated.</strong> The photo drives those ${done}; the rest are copied from the starting preset untouched.
+      <div class="row-actions"><button class="button compact" data-action="open-calibrate">Calibrate the rest</button></div>
+    </div>`;
   }
-  return { extras, baseProfile, ready: extras > 0 };
+  return `<div class="callout success"><strong>All ${total} sliders calibrated.</strong> The photo drives every mapped facial proportion.</div>`;
 }
 
-function renderCreateResultArea() {
-  if (state.createFace.stage === 'result') return createResultPanel();
-  if (state.createFace.stage === 'reference-required') return renderReferenceRequiredPanel();
-  return `<div class="panel"><div class="panel-header"><div><div class="panel-title">Result</div><div class="panel-subtitle">Your output appears here after Create Preset finishes.</div></div></div><div class="panel-body"><div class="empty-state">Load a target photo and a starting preset, then click <strong>Create Preset</strong>.</div></div></div>`;
+function actionPanel() {
+  const ready = Boolean(state.photo?.measurements) && Boolean(state.base) && calibratedCount() > 0;
+  const reasons = [];
+  if (!state.photo?.measurements) reasons.push('an analyzed photo');
+  if (!state.base) reasons.push('a starting preset');
+  if (calibratedCount() === 0) reasons.push('at least one calibrated slider');
+
+  return `<div class="panel action-panel">
+    <div class="panel-body stack compact-gap">
+      <div class="field">
+        <label>Match strength — how far to move toward the photo (${state.strength}%)</label>
+        <input type="range" class="slider" min="0" max="100" value="${state.strength}" data-input="strength">
+        <div class="help">100% lands exactly on the measured proportions. 60–80% usually looks more like a BDO character.</div>
+      </div>
+      <div class="field">
+        <label>Save as</label>
+        <input class="input" data-input="output-name" value="${escapeHTML(state.outputName)}">
+      </div>
+      <button class="button primary large-action" data-action="generate"${ready ? '' : ' disabled'}>Create Preset</button>
+      ${ready ? '' : `<div class="help">Still needs ${escapeHTML(reasons.join(', '))}.</div>`}
+    </div>
+  </div>`;
 }
 
-function createResultPanel() {
-  const flow = state.createFace;
-  const result = flow.result;
-  if (!result) return '';
-  const plan = flow.autoPlan;
-  const warnings = [...(result.warnings ?? []), ...(flow.warnings ?? [])];
+function resultPanel() {
+  const result = state.result;
+  if (!result) {
+    return `<div class="panel"><div class="panel-header"><div><div class="panel-title">Result</div><div class="panel-subtitle">Appears here once you create a preset</div></div></div>
+      <div class="panel-body"><div class="empty-state">Add a photo and a starting preset, then click <strong>Create Preset</strong>.</div></div></div>`;
+  }
+  const applied = result.applied ?? [];
+  const skipped = result.skipped ?? [];
+  const rows = applied.map((item) => `<div class="data-row">
+      <div class="data-main"><strong>${escapeHTML(item.label)}</strong><span>byte ${item.offset} · photo said ${Math.round(item.metricValue * 100)} · slider ${item.from} → ${item.to}</span></div>
+    </div>`).join('');
+
   return `<div class="panel">
-    <div class="panel-header"><div><div class="panel-title">Result</div><div class="panel-subtitle">Validated version 20 preset · ${result.changedBlocks.length} blocks changed</div></div><div class="inline"><button class="button primary" data-action="save-create-result">Save to BDO</button><button class="button" data-action="download-create-result">Download Preset</button></div></div>
-    <div class="panel-body stack">
-      <div class="summary-strip four-fit"><div class="summary-stat"><span>Confidence</span><strong>${escapeHTML(plan?.summary ?? 'Unknown')}</strong></div><div class="summary-stat"><span>References used</span><strong>${flow.candidates.length}</strong></div><div class="summary-stat"><span>Changed groups</span><strong>${Object.entries(plan?.groups ?? {}).filter(([, group]) => Number(group.weight) > 0).length}</strong></div><div class="summary-stat"><span>Build time</span><strong>${escapeHTML(formatDuration(flow.lastDurationMs))}</strong></div></div>
-      ${warnings.length ? warnings.map((warning) => `<div class="callout warning">${escapeHTML(warning)}</div>`).join('') : '<div class="callout success">Same-class automatic blending completed and the result passed binary validation.</div>'}
-      <div class="panel panel-flat"><div class="panel-header"><div><div class="panel-title">References selected</div><div class="panel-subtitle">Closest profiled presets from your local library</div></div></div><div class="panel-body"><div class="data-list compact-list">${flow.candidates.map((candidate, index) => `<div class="data-row"><div class="data-main"><strong>${index + 1}. ${escapeHTML(candidate.name)}</strong><span>${shortHash(candidate.sha256)} · overall distance ${candidate.overallDistance.toFixed(3)}</span></div></div>`).join('')}</div></div></div>
-      <div class="inline"><button class="button" data-action="toggle-adjustments">${flow.adjustmentsOpen ? 'Hide Adjust Result' : 'Adjust Result'}</button><button class="button ghost" data-action="start-over-create">Start over</button></div>
-      ${flow.adjustmentsOpen ? renderAdjustmentsPanel() : ''}
-    </div>
-  </div>`;
-}
-
-function renderAdjustmentsPanel() {
-  const groups = (state.status.groups ?? []).filter((group) => !group.protected);
-  const plan = state.createFace.autoPlan;
-  return `<div class="panel panel-flat"><div class="panel-header"><div><div class="panel-title">Adjust result</div><div class="panel-subtitle">Unsupported groups stay at 0% until you change them.</div></div><button class="button compact" data-action="rebuild-create-result">Rebuild Result</button></div><div class="panel-body">${groups.map((group) => {
-    const suggestion = plan?.groups?.[group.id] ?? { weight: 0, donorName: 'Reference 1', confidence: 0 };
-    return `<div class="slider-row"><div class="slider-label"><strong>${escapeHTML(group.name)}</strong><span>${escapeHTML(suggestion.donorName ?? 'Reference')} · ${confidenceLabel(suggestion.confidence ?? 0)} confidence</span></div><input class="slider" type="range" min="0" max="100" step="1" value="${Math.round(suggestion.weight ?? 0)}" data-create-weight="${group.id}"><div class="slider-value">${Math.round(suggestion.weight ?? 0)}%</div></div>`;
-  }).join('')}</div></div>`;
-}
-
-function renderReferenceRequiredPanel() {
-  const reason = state.createFace.referenceNeeded ?? 'Profile a different same-class preset. The starting preset cannot be used as its own donor.';
-  return `<div class="panel"><div class="panel-header"><div><div class="panel-title">Reference screenshot needed</div><div class="panel-subtitle">Create Face uses your local profiled preset library as its matching brain.</div></div></div><div class="panel-body stack"><div class="callout warning">${escapeHTML(reason)}</div><div class="inline"><button class="button primary" data-action="open-library-profile-help">Open Preset Library</button><button class="button" data-nav="merge">Use Manual Merge</button></div></div></div>`;
-}
-
-function renderCreateFace() {
-  const disabledReason = createDisabledReason();
-  const flow = state.createFace;
-  const referenceInfo = sameClassProfileSummary();
-  const readyText = !state.portraits.target?.analysis
-    ? 'Waiting for a target photo.'
-    : !state.presets.base
-      ? 'Waiting for a starting preset.'
-      : referenceInfo.ready
-        ? `${referenceInfo.extras} different same-class profiled reference${referenceInfo.extras === 1 ? '' : 's'} available automatically.`
-        : 'No different profiled same-class reference is available yet.';
-  const referenceCallout = referenceInfo.ready
-    ? `<div class="callout success">Automatic matching is ready. ${referenceInfo.extras} different profiled same-class preset${referenceInfo.extras === 1 ? '' : 's'} can be borrowed. ${referenceInfo.baseProfile ? 'The starting preset profile will improve interpolation, but it is never treated as a donor.' : ''}</div>`
-    : `<div class="callout warning">Profile at least one <strong>different</strong> preset of this class in Preset Library. The starting preset cannot change itself.</div>`;
-  const processingPanel = flow.stage === 'processing'
-    ? `<div class="panel panel-flat"><div class="panel-body stack"><div class="summary-strip triple"><div class="summary-stat"><span>Current step</span><strong>${escapeHTML(flow.processingStep || 'Working…')}</strong></div><div class="summary-stat"><span>Safety timeout</span><strong>25 seconds</strong></div><div class="summary-stat"><span>Behavior</span><strong>Automatic</strong></div></div>${workflowSteps([{ title: 'Analyze target face', text: 'Profile the face from the target image.' }, { title: 'Pick references', text: 'Choose the closest profiled same-class presets from your local library.' }, { title: 'Build preset', text: 'Generate and validate a same-class BDO preset.' }])}<div class="inline"><button class="button danger" data-action="cancel-create-face">Cancel</button></div></div></div>`
-    : '';
-
-  return `<section class="view compact-view create-view">
-    ${viewHeader('Create Face', 'Simple path: add a photo, choose a starting preset, click Create Preset, then save the result into Black Desert.', '')}
-    ${compactProgress(flow.stage)}
-    <div class="spacer"></div>
-    <div class="callout">Fast path: <strong>photo → starting preset → Create Preset → Save to BDO</strong>. Manual preset mixing is still available under <strong>More Tools</strong>.</div>
-    <div class="spacer"></div>
-    <div class="grid compact-create-grid compact-create-grid-3">
-      ${portraitPanel('target', '1 · Target photo', 'Front-facing, neutral, full face visible.', true)}
-      ${presetCard('base', '2 · Starting preset', 'Same-class result base. Protected metadata stays from this file.')}
-      <div class="panel action-panel">
-        <div class="panel-header"><div><div class="panel-title">3 · Create preset</div><div class="panel-subtitle">Automatic matching uses your profiled local library.</div></div></div>
-        <div class="panel-body stack">
-          <div class="data-list compact-list">
-            <div class="data-row"><div class="data-main"><strong>Photo</strong><span>${state.portraits.target?.analysis ? 'Ready' : 'Missing'}</span></div></div>
-            <div class="data-row"><div class="data-main"><strong>Starting preset</strong><span>${state.presets.base ? 'Ready' : 'Missing'}</span></div></div>
-            <div class="data-row"><div class="data-main"><strong>Automatic references</strong><span>${escapeHTML(readyText)}</span></div></div>
-          </div>
-          ${referenceCallout}
-          <div class="inline"><button class="button primary large-action" data-action="create-face" ${disabledReason ? 'disabled' : ''}>Create Preset</button><button class="button" data-action="open-library-profile-help">Preset Library</button><button class="button" data-nav="merge">Manual Merge</button></div>
-          ${disabledReason ? `<div class="help warning-text">${escapeHTML(disabledReason)}</div>` : '<div class="help">Output appears immediately on the right. Save to BDO when it looks good.</div>'}
-        </div>
+    <div class="panel-header">
+      <div><div class="panel-title">Result</div><div class="panel-subtitle">Validated version 20 preset · ${applied.length} slider(s) driven from the photo</div></div>
+      <div class="inline">
+        <button class="button primary" data-action="save-result">Save into Black Desert</button>
+        <button class="button" data-action="download-result">Download</button>
       </div>
     </div>
-    ${processingPanel ? `<div class="spacer"></div>${processingPanel}` : ''}
-    <div class="spacer"></div>
-    ${renderCreateResultArea()}
-  </section>`;
-}
-
-function renderQuickMixButtons() {
-  const values = [0, 25, 50, 75, 100];
-  return `<div class="inline quick-mix">${values.map((value) => `<button class="button compact" data-action="mix-${value}">${value === 0 ? 'Keep start' : value === 100 ? 'Use borrow' : `${value}/${100 - value}`}</button>`).join('')}</div>`;
-}
-
-function renderMerge() {
-  const groups = (state.status.groups ?? []).filter((group) => !group.protected);
-  const ready = state.presets.base && state.presets.donor;
-  const result = state.blend.result;
-  return `<section class="view compact-view">
-    ${viewHeader('Merge Presets', 'Combine two existing presets together. This remains a separate manual workflow.', `<button class="button primary" data-action="generate" ${ready ? '' : 'disabled'}>Create merged preset</button>`)}
-    <div class="callout success">Use this when you want full manual control. Create Face is now the simpler photo workflow.</div>
-    <div class="spacer"></div>
-    <div class="grid two">${presetCard('base', 'Starting preset', 'Required. Protected class and metadata stay from this file.')} ${presetCard('donor', 'Preset to borrow from', 'Required. FaceForge copies feature blocks from this file.')}</div>
-    <div class="spacer"></div>
-    <div class="grid sidebar-main"><div class="panel"><div class="panel-header"><div><div class="panel-title">Merge controls</div><div class="panel-subtitle">Start simple, then fine-tune if needed</div></div></div><div class="panel-body stack"><div class="field"><label for="blend-seed">Deterministic seed</label><input id="blend-seed" class="input" data-setting="blend-seed" value="${escapeHTML(state.blend.seed)}"><div class="help">Same files, weights, and seed always produce the same binary output.</div></div><div class="field"><label>Quick mixes</label>${renderQuickMixButtons()}</div><label class="toggle"><input type="checkbox" data-setting="cross-class" ${state.blend.allowCrossClass ? 'checked' : ''}><span>Enable experimental cross-class transplanting</span></label><div class="callout warning">Cross-class results may deform or fail in-game. The class identity block still stays with the starting preset.</div></div></div><div class="panel"><div class="panel-header"><div><div class="panel-title">Feature weights</div><div class="panel-subtitle">0% keeps the starting preset. 100% copies the borrowed feature blocks.</div></div><button class="button compact" data-action="reset-weights">Reset 50/50</button></div><div class="panel-body">${groups.map((group) => `<div class="slider-row"><div class="slider-label"><strong>${escapeHTML(group.name)}</strong><span>${escapeHTML(group.description)}</span></div><input class="slider" type="range" min="0" max="100" step="1" value="${state.blend.weights[group.id] ?? 50}" data-weight="${group.id}"><div class="slider-value">${Math.round(state.blend.weights[group.id] ?? 50)}%</div></div>`).join('')}</div></div></div>
-    ${result ? `<div class="spacer"></div>${resultPanel(result, 'merge')}` : ''}
-  </section>`;
-}
-
-function resultPanel(result, mode = 'merge') {
-  const saveAction = mode === 'create' ? 'save-create-result' : 'save-result';
-  const downloadAction = mode === 'create' ? 'download-create-result' : 'download-result';
-  return `<div class="panel"><div class="panel-header"><div><div class="panel-title">Generated preset</div><div class="panel-subtitle">Valid version 20 binary · ${result.changedBlocks.length} blocks changed</div></div><div class="inline"><button class="button" data-action="download-sidecar">Download report</button><button class="button primary" data-action="${downloadAction}">Download preset</button></div></div><div class="panel-body"><div class="summary-strip"><div class="summary-stat"><span>SHA-256</span><strong title="${escapeHTML(result.sha256)}">${shortHash(result.sha256)}</strong></div><div class="summary-stat"><span>Changed blocks</span><strong>${result.changedBlocks.length}</strong></div><div class="summary-stat"><span>Starting class</span><strong>${escapeHTML(state.presets.base?.inspect?.classFingerprint ?? 'Unknown')}</strong></div><div class="summary-stat"><span>Safety</span><strong>${state.blend.allowCrossClass ? 'Experimental' : 'Same class'}</strong></div></div>${result.warnings?.length ? result.warnings.map((warning) => `<div class="callout warning">${escapeHTML(warning)}</div>`).join('') : '<div class="callout success">Protected metadata and class identity were preserved from the starting preset.</div>'}<div class="spacer"></div><div class="inline"><input class="input" style="max-width:360px" data-setting="output-filename" value="${escapeHTML(state.settings.outputFilename)}"><button class="button primary" data-action="${saveAction}">Save into BDO folder</button></div></div></div>`;
-}
-
-function renderTools() {
-  return `<section class="view compact-view">
-    ${viewHeader('More Tools', 'Manual and diagnostic workflows stay available, but they no longer interrupt the normal Create Face path.', '')}
-    <div class="grid three home-grid">${panelLink('Merge Presets', 'Blend two preset files manually and fine-tune each feature group.', 'merge', 'Open Merge')} ${panelLink('Preset Laboratory', 'Inspect block changes and compare encrypted preset regions.', 'lab', 'Open Laboratory')} ${panelLink('Calibration', 'Record controlled before/after experiments to map slider effects.', 'calibration', 'Open Calibration')}</div>
-  </section>`;
-}
-
-function renderLab() {
-  const left = state.presets.labLeft;
-  const right = state.presets.labRight;
-  const changed = new Set(state.compare?.changedBlocks ?? []);
-  const detail = left?.inspect?.blocks?.find((block) => block.index === selectedBlock);
-  return `<section class="view compact-view">
-    ${viewHeader('Preset Laboratory', 'Inspect and compare encrypted block regions.', `<button class="button primary" data-action="compare" ${left && right ? '' : 'disabled'}>Compare presets</button>`)}
-    <div class="grid two">${presetCard('labLeft', 'Left preset', 'The reference preset to inspect and compare')} ${presetCard('labRight', 'Right preset', 'Optional second preset for comparison')}</div>
-    <div class="spacer"></div>
-    <div class="grid sidebar-main"><div class="panel"><div class="panel-header"><div><div class="panel-title">Block detail</div><div class="panel-subtitle">Selected encrypted region</div></div></div><div class="panel-body">${detail ? `<div class="stack"><div class="summary-strip triple"><div class="summary-stat"><span>Block</span><strong>#${detail.index}</strong></div><div class="summary-stat"><span>Group</span><strong>${escapeHTML(detail.groupName || 'Unknown')}</strong></div><div class="summary-stat"><span>Protected</span><strong>${detail.protected ? 'Yes' : 'No'}</strong></div></div><div class="callout">${escapeHTML(detail.hex)}</div></div>` : '<div class="empty-state">Select a block from the heatmap.</div>'}</div></div><div class="panel"><div class="panel-header"><div><div class="panel-title">Block heatmap</div><div class="panel-subtitle">115 fixed-size encrypted blocks</div></div>${state.compare ? `<span class="status-chip">${state.compare.changedBlocks.length} changed</span>` : ''}</div><div class="panel-body">${left ? `<div class="block-heatmap">${left.inspect.blocks.map((block) => `<button class="block ${block.isDefault ? 'default' : ''} ${block.protected ? 'protected' : ''} ${changed.has(block.index) ? 'changed' : ''} ${selectedBlock === block.index ? 'selected' : ''}" data-block="${block.index}" title="#${block.index} · ${escapeHTML(block.groupName || 'Unknown')} · ${block.hex}"></button>`).join('')}</div>` : '<div class="empty-state">Load a left preset to reveal the block map.</div>'}</div></div></div>
-  </section>`;
-}
-
-function renderCalibration() {
-  const observations = Object.values(state.calibration?.observations ?? {});
-  return `<section class="view compact-view">
-    ${viewHeader('Calibration', 'Create before-and-after presets, change one control only, then record which encrypted blocks moved.', `<button class="button" data-action="export-calibration">Export database</button>`)}
-    <div class="grid two">${presetCard('calBefore', 'Before preset', 'Save the untouched or minimum state')} ${presetCard('calAfter', 'After preset', 'Change exactly one BDO customization control')}</div>
-    <div class="spacer"></div>
-    <div class="panel"><div class="panel-header"><div><div class="panel-title">Record observation</div><div class="panel-subtitle">Precise labels make the database useful</div></div></div><div class="panel-body"><div class="inline"><input class="input" style="max-width:460px" id="calibration-label" placeholder="Example: Lahn nose width maximum"><button class="button primary" data-action="observe-calibration" ${state.presets.calBefore && state.presets.calAfter ? '' : 'disabled'}>Analyze changed blocks</button><label class="button"><input class="hidden" type="file" accept="application/json,.json" data-import-calibration>Import JSON</label></div></div></div>
-    <div class="spacer"></div>
-    <div class="panel"><div class="panel-header"><div><div class="panel-title">Learned observations</div><div class="panel-subtitle">Intersection means blocks changed in every sample</div></div><span class="status-chip">${observations.length} mappings</span></div><div class="panel-body"><div class="data-list">${observations.length ? observations.sort((a, b) => a.label.localeCompare(b.label)).map((item) => `<div class="data-row"><div class="data-main"><strong>${escapeHTML(item.label)}</strong><span>${item.samples} sample${item.samples === 1 ? '' : 's'} · intersection [${item.intersection.join(', ')}] · union [${item.union.join(', ')}]</span></div><button class="button compact danger" data-delete-calibration="${escapeHTML(item.label)}">Remove</button></div>`).join('') : '<div class="empty-state">No observations yet. The calibration database stays local.</div>'}</div></div></div>
-  </section>`;
-}
-
-function filteredLibraryItems() {
-  const search = state.settings.librarySearch.trim().toLowerCase();
-  const profiledOnly = state.settings.libraryProfiledOnly;
-  return state.library.items.filter((item) => {
-    const profile = getProfileForPreset(item);
-    if (profiledOnly && !profile) return false;
-    if (!search) return true;
-    return item.name.toLowerCase().includes(search) || item.sha256.toLowerCase().includes(search) || item.classFingerprint.toLowerCase().includes(search);
-  });
-}
-
-function renderLibrary() {
-  const items = filteredLibraryItems();
-  return `<section class="view compact-view">
-    ${viewHeader('Preset Library', 'Scan your Black Desert customization folder, profile screenshots locally, and send presets straight into Create Face or Merge.', `<button class="button primary" data-action="scan-library">${state.library.loading ? 'Scanning…' : 'Scan folder'}</button>`)}
-    <div class="panel"><div class="panel-header"><div><div class="panel-title">${escapeHTML(state.settings.customizationDir || 'Customization folder not configured')}</div><div class="panel-subtitle">${state.library.items.length} valid preset${state.library.items.length === 1 ? '' : 's'} found</div></div></div><div class="panel-body stack"><div class="inline"><input class="input" placeholder="Search filename or hash" value="${escapeHTML(state.settings.librarySearch)}" data-setting="library-search"><label class="toggle"><input type="checkbox" data-setting="library-profiled-only" ${state.settings.libraryProfiledOnly ? 'checked' : ''}><span>Profiled only</span></label></div><div class="data-list compact-list">${items.length ? items.map(renderLibraryRow).join('') : '<div class="empty-state">Scan the detected folder or change the path in Settings.</div>'}</div>${state.library.warnings.map((warning) => `<div class="callout warning">${escapeHTML(warning)}</div>`).join('')}</div></div>
-  </section>`;
-}
-
-function renderLibraryRow(item) {
-  const profile = getProfileForPreset(item);
-  return `<div class="data-row library-row"><div class="data-main"><strong>${escapeHTML(item.name)}</strong><span>${shortHash(item.sha256)} · class ${shortHash(item.classFingerprint)} · ${profile ? `Profiled ${new Date(profile.profiledAt).toLocaleDateString()}` : 'Needs screenshot'}</span></div><div class="row-actions wrap"><button class="button compact" data-library-load="${escapeHTML(item.path)}" data-library-slot="base" data-library-view="create">Use as Starting Preset</button><label class="button compact"><input class="hidden" type="file" accept="image/*" data-profile-input="${escapeHTML(item.sha256)}">${profile ? 'Replace Screenshot' : 'Add Screenshot'}</label><button class="button compact" data-library-load="${escapeHTML(item.path)}" data-library-slot="base" data-library-view="merge">Manual Merge</button>${profile ? `<button class="button compact danger" data-remove-profile="${escapeHTML(item.sha256)}">Remove Profile</button>` : ''}</div></div>`;
-}
-
-function renderSettings() {
-  return `<section class="view compact-view">
-    ${viewHeader('Settings', 'FaceForge BDO runs as a private token-protected loopback service. It reads and writes standalone preset files only.', '')}
-    <div class="grid two"><div class="panel"><div class="panel-header"><div><div class="panel-title">Black Desert paths</div><div class="panel-subtitle">Override detection for OneDrive or custom Documents layouts</div></div></div><div class="panel-body"><div class="field"><label>Customization directory</label><input class="input" data-setting="customization-dir" value="${escapeHTML(state.settings.customizationDir)}"><div class="help">Typical location: Documents\Black Desert\Customization</div></div><div class="field"><label>Default output filename</label><input class="input" data-setting="output-filename" value="${escapeHTML(state.settings.outputFilename)}"></div><button class="button" data-action="scan-library">Verify folder</button></div></div><div class="panel"><div class="panel-header"><div><div class="panel-title">Local service</div><div class="panel-subtitle">Version ${escapeHTML(state.status.version)} · schema ${escapeHTML(state.status.schemaName)}</div></div></div><div class="panel-body stack"><div class="callout success">Connected through a per-launch secret token. API requests without it are rejected.</div><div class="callout">No process injection, memory reading, keyboard automation, or game-client modification is used.</div><button class="button danger" data-action="shutdown">${icons.power} Exit FaceForge BDO</button></div></div></div>
-    <div class="spacer"></div>
-    <div class="panel"><div class="panel-header"><div><div class="panel-title">Recent activity</div><div class="panel-subtitle">Current session only</div></div></div><div class="panel-body"><div class="data-list">${state.activity.length ? state.activity.map((item) => `<div class="data-row"><div class="data-main"><strong>${escapeHTML(item.message)}</strong><span>${new Date(item.at).toLocaleTimeString()}</span></div></div>`).join('') : '<div class="empty-state">No operations yet.</div>'}</div></div></div>
-  </section>`;
-}
-
-function renderShell() {
-  const renderView = {
-    create: renderCreateFace,
-    library: renderLibrary,
-    tools: renderTools,
-    merge: renderMerge,
-    lab: renderLab,
-    calibration: renderCalibration,
-    settings: renderSettings
-  }[state.activeView] ?? renderCreateFace;
-  root.className = '';
-  root.innerHTML = `<div class="app-shell">
-    <header class="topbar"><div class="brand"><div class="brand-mark">FF</div><div class="brand-copy"><strong>FaceForge BDO</strong><span>Offline BDO preset workshop</span></div></div><div class="topbar-spacer"></div><div class="status-chip" title="${escapeHTML(state.settings.customizationDir)}"><span class="status-dot"></span>${escapeHTML(state.settings.customizationDir || 'Local service connected')}</div></header>
-    <aside class="sidebar"><div class="nav-label">Workspaces</div>${nav.map(([id, label, icon]) => `<button class="nav-button ${activeSidebarView() === id ? 'active' : ''}" data-nav="${id}"><span class="nav-icon">${icons[icon]}</span>${escapeHTML(label)}</button>`).join('')}<div class="sidebar-footer">Preset format v${state.status.presetVersion}<br>${state.status.groups?.length ?? 0} mapped regions<br>Photo workflow streamlined for 0.5.2</div></aside>
-    <main class="main">${renderView()}</main>
+    <div class="panel-body stack">
+      ${(result.warnings ?? []).map((line) => `<div class="callout warning">${escapeHTML(line)}</div>`).join('')}
+      <div class="data-list compact-list">${rows}</div>
+      ${skipped.length ? `<details class="details-card"><summary>${skipped.length} slider(s) left untouched</summary><div class="data-list compact-list">${skipped
+        .map((item) => `<div class="data-row"><div class="data-main"><strong>${escapeHTML(item.label)}</strong><span>${escapeHTML(item.reason)}</span></div></div>`)
+        .join('')}</div></details>` : ''}
+      <div class="help">In Black Desert: character creation → Load File → pick <strong>${escapeHTML(safeFilename(state.outputName))}</strong>, then fine-tune by hand.</div>
+    </div>
   </div>`;
 }
 
-function resetCreateFaceFlow(preserveInputs = true) {
-  state.createFace = {
-    stage: 'input',
-    processingStep: '',
-    startedAt: null,
-    lastDurationMs: null,
-    result: null,
-    autoPlan: null,
-    candidates: [],
-    warnings: [],
-    adjustmentsOpen: false,
-    referenceNeeded: null,
-    baseProfileFallback: false
-  };
-  if (createFaceAbortController) {
-    try { createFaceAbortController.abort(); } catch { /* ignore */ }
+function calibratePanel() {
+  if (state.panel !== 'calibrate') {
+    return `<button class="button ghost" data-action="open-calibrate">Calibrate sliders (${calibratedCount()} of ${controls().length} done)</button>`;
   }
-  createFaceAbortController = null;
-  if (!preserveInputs) {
-    if (state.portraits.target?.preview) URL.revokeObjectURL(state.portraits.target.preview);
-    state.portraits.target = null;
-    state.presets.base = null;
+  const rows = controls().map((control) => {
+    const calibration = calibrationFor(control.id);
+    const busy = state.calibrate.busy === control.id;
+    return `<div class="data-row">
+      <div class="data-main">
+        <strong>${escapeHTML(control.label)}</strong>
+        <span>${escapeHTML(control.section)} · ${escapeHTML(control.instruction)}</span>
+        <span class="${calibration ? 'mono' : 'warning-text'}">${calibration
+          ? `mapped to byte ${calibration.offset} (class ${calibration.classId})`
+          : 'not calibrated'}</span>
+      </div>
+      <div class="row-actions wrap">
+        <label class="button compact${state.calibrate.base ? '' : ' ghost'}">
+          <input type="file" class="hidden" data-learn="${escapeHTML(control.id)}"${state.calibrate.base && !busy ? '' : ' disabled'}>
+          ${busy ? 'Reading…' : calibration ? 'Redo' : 'Pick maxed save'}
+        </label>
+        ${calibration ? `<button class="button ghost compact" data-action="forget" data-control="${escapeHTML(control.id)}">Forget</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="panel">
+    <div class="panel-header">
+      <div><div class="panel-title">Calibrate sliders</div><div class="panel-subtitle">Teach FaceForge which byte each slider lives in. Once per install.</div></div>
+      <button class="button ghost compact" data-action="close-panel">Close</button>
+    </div>
+    <div class="panel-body stack">
+      <div class="step-list compact">
+        <div class="step-item"><div class="step-number">1</div><div><strong>Save a base preset.</strong> In BDO's character creator, save your character as <span class="mono">cal base</span> without changing anything.</div></div>
+        <div class="step-item"><div class="step-number">2</div><div><strong>Load that base preset below.</strong></div></div>
+        <div class="step-item"><div class="step-number">3</div><div><strong>For one slider:</strong> reload <span class="mono">cal base</span> in game, drag only that slider to its maximum, save under a new name, then pick that file here.</div></div>
+        <div class="step-item"><div class="step-number">4</div><div><strong>Repeat</strong> for each slider you care about. Always start from the base again so only one slider differs.</div></div>
+      </div>
+      <div class="field">
+        <label>Base preset (unchanged save)</label>
+        <label class="button${state.calibrate.base ? ' ghost' : ' primary'}">
+          <input type="file" class="hidden" data-input="calibrate-base">
+          ${state.calibrate.base ? `Loaded: ${escapeHTML(state.calibrate.base.name)} — change` : 'Choose the base preset file…'}
+        </label>
+      </div>
+      ${state.calibrate.error ? `<div class="callout danger">${escapeHTML(state.calibrate.error)}</div>` : ''}
+      ${state.calibrate.lastLearned ? `<div class="callout success">${escapeHTML(state.calibrate.lastLearned)}</div>` : ''}
+      ${state.calibrate.base ? '' : '<div class="callout">Load the base preset first — every calibration is a diff against it.</div>'}
+      <div class="data-list">${rows}</div>
+    </div>
+  </div>`;
+}
+
+function mergePanel() {
+  if (state.panel !== 'merge') {
+    return '<button class="button ghost" data-action="open-merge">Merge two presets</button>';
   }
+  const result = state.merge.result;
+  return `<div class="panel">
+    <div class="panel-header">
+      <div><div class="panel-title">Merge two presets</div><div class="panel-subtitle">Mixes only the face and body sliders. Needs no calibration.</div></div>
+      <button class="button ghost compact" data-action="close-panel">Close</button>
+    </div>
+    <div class="panel-body stack compact-gap">
+      <div class="help">Base is the starting preset chosen above${state.base ? `: <strong>${escapeHTML(state.base.name)}</strong>` : ' — pick one first.'}</div>
+      <label class="button ghost">
+        <input type="file" class="hidden" data-input="donor-file">
+        ${state.merge.donor ? `Donor: ${escapeHTML(state.merge.donor.name)} — change` : 'Choose the donor preset file…'}
+      </label>
+      <div class="field">
+        <label>Donor weight (${state.merge.weight}%)</label>
+        <input type="range" class="slider" min="0" max="100" value="${state.merge.weight}" data-input="merge-weight">
+      </div>
+      <button class="button primary" data-action="merge"${state.base && state.merge.donor ? '' : ' disabled'}>Merge</button>
+      ${result ? `<div class="callout success">${result.changedBytes} slider byte(s) changed.</div>
+        <div class="inline"><button class="button primary" data-action="save-merge">Save into Black Desert</button><button class="button" data-action="download-merge">Download</button></div>` : ''}
+    </div>
+  </div>`;
 }
 
-async function persistReferenceCatalog() {
-  const saved = await apiPost('/api/reference-catalog', state.referenceCatalog, { timeoutMs: 10000 });
-  state.referenceCatalog = saved;
-  saveReferenceCatalog(saved);
-}
-
-function getProfileForPreset(presetLike) {
-  const sha = String(presetLike?.inspect?.sha256 ?? presetLike?.sha256 ?? '').trim().toLowerCase();
-  return sha ? state.referenceCatalog.profiles?.[sha] ?? null : null;
-}
-
-function libraryItemBySha(sha) {
-  return state.library.items.find((item) => item.sha256.toLowerCase() === String(sha).toLowerCase()) ?? null;
-}
-
-async function loadPreset(slot, fileOrData) {
-  try {
-    const item = fileOrData.data ? fileOrData : await readPresetFile(fileOrData);
-    const inspect = await apiPost('/api/inspect', { name: item.name, data: item.data });
-    state.presets[slot] = { ...item, inspect };
-    if (slot === 'labLeft' || slot === 'labRight') state.compare = null;
-    if (slot === 'base' || slot === 'donor') {
-      state.blend.result = null;
-      if (slot === 'base') resetCreateFaceFlow(true);
-    }
-    selectedBlock = null;
-    addActivity(`Loaded ${item.name} into ${slot}.`);
-    toast(`${item.name} loaded and validated.`, 'success');
-    renderShell();
-  } catch (error) {
-    toast(error.message, 'error');
+function render() {
+  if (!state.status) {
+    root.className = 'boot-screen';
+    root.innerHTML = '<div class="boot-mark">FF</div><h1>FaceForge BDO</h1><p>Opening the local preset forge…</p>';
+    return;
   }
+  root.className = 'app-shell';
+  root.innerHTML = `
+    <header class="topbar">
+      <div class="brand"><div class="brand-mark">FF</div><div class="brand-copy"><strong>FaceForge BDO</strong><span>Photo to Black Desert preset, offline</span></div></div>
+      <div class="topbar-spacer"></div>
+      <div class="status-chip" title="${escapeHTML(state.status.customizationDir)}"><span class="status-dot"></span>${escapeHTML(state.status.customizationDir || 'Local service connected')}</div>
+      <button class="button ghost compact" data-action="shutdown">Exit</button>
+    </header>
+    <main class="main">
+      <section class="view compact-view">
+        ${calibrationBanner()}
+        <div class="grid two">${photoPanel()}${basePanel()}</div>
+        ${actionPanel()}
+        ${resultPanel()}
+        <div class="stack compact-gap">${calibratePanel()}${mergePanel()}</div>
+      </section>
+    </main>
+    ${toastStack()}`;
 }
 
-async function loadPortrait(slot, file) {
-  const previousPreview = state.portraits[slot]?.preview;
-  if (previousPreview) URL.revokeObjectURL(previousPreview);
-  const preview = URL.createObjectURL(file);
-  state.portraits[slot] = { name: file.name, preview, loading: true, analysis: null, error: null };
-  renderShell();
-  try {
-    const image = new Image();
-    image.decoding = 'async';
-    image.src = preview;
-    await image.decode();
-    const analysis = await analyzeFaceImage(image);
-    state.portraits[slot] = { name: file.name, preview, loading: false, analysis, error: null };
-    resetCreateFaceFlow(true);
-    addActivity(`Analyzed ${file.name} locally.`);
-    toast(`${file.name} analyzed locally.`, 'success');
-  } catch (error) {
-    state.portraits[slot] = { name: file.name, preview, loading: false, analysis: null, error: error.message };
-    toast(error.message, 'error');
-  }
-  renderShell();
-}
+// ------------------------------------------------------------------ actions
 
 async function scanLibrary() {
   state.library.loading = true;
-  renderShell();
+  render();
   try {
-    const path = encodeURIComponent(state.settings.customizationDir);
-    const result = await apiGet(`/api/folder/scan?path=${path}`);
-    state.settings.customizationDir = result.directory;
-    state.library.items = result.presets ?? [];
+    const result = await apiGet('/api/folder/scan', { timeoutMs: 20000 });
+    state.library.presets = result.presets ?? [];
     state.library.warnings = result.warnings ?? [];
-    addActivity(`Scanned ${result.directory}: ${state.library.items.length} valid presets.`);
-    toast(`${state.library.items.length} valid presets found.`, 'success');
   } catch (error) {
     toast(error.message, 'error');
-  }
-  state.library.loading = false;
-  renderShell();
-}
-
-async function loadLibraryPreset(path, slot, targetView) {
-  try {
-    const result = await apiPost('/api/folder/read', { path });
-    await loadPreset(slot, { name: result.name, data: result.data, path: result.path });
-    if (targetView) state.activeView = targetView;
-    renderShell();
-  } catch (error) {
-    toast(error.message, 'error');
+  } finally {
+    state.library.loading = false;
+    render();
   }
 }
 
-async function attachReferenceScreenshot(sha, file) {
-  const item = libraryItemBySha(sha);
-  if (!item) {
-    toast('Could not find that preset in the current library scan.', 'error');
-    return;
-  }
+async function refreshStatus() {
+  state.status = await apiGet('/api/status', { timeoutMs: 15000 });
+  if (!state.outputName && state.status.customizationDir) state.outputName = 'FaceForge Face';
+}
+
+async function loadPhoto(file) {
+  const preview = URL.createObjectURL(file);
+  state.photo = { preview, loading: true, error: '', measurements: null };
+  render();
   try {
-    toast(`Analyzing ${file.name} for ${item.name}...`, 'info');
-    const url = URL.createObjectURL(file);
     const image = new Image();
-    image.decoding = 'async';
-    image.src = url;
+    image.src = preview;
     await image.decode();
     const analysis = await analyzeFaceImage(image);
-    URL.revokeObjectURL(url);
-    state.referenceCatalog = upsertReferenceProfile(state.referenceCatalog, {
-      sha256: item.sha256,
-      name: item.name,
-      classFingerprint: item.classFingerprint,
-      imageName: file.name,
-      metrics: analysis.measurements.normalized,
-      quality: analysis.measurements.quality
-    });
-    await persistReferenceCatalog();
-    addActivity(`Profiled screenshot for ${item.name}.`);
-    toast(`Screenshot linked to ${item.name}.`, 'success');
-    renderShell();
+    state.photo = { preview, loading: false, error: '', measurements: analysis.measurements };
+    toast('Face measured on this PC.', 'success');
   } catch (error) {
+    state.photo = { preview, loading: false, error: error.message, measurements: null };
     toast(error.message, 'error');
   }
+  render();
 }
 
-function automaticRecipeFromPlan(plan) {
-  return {
-    name: outputFileName(),
-    seed: state.blend.seed,
-    allowCrossClass: false,
-    allowProtected: false,
-    groups: Object.entries(plan.groups ?? {})
-      .filter(([, value]) => Number(value.weight) > 0)
-      .map(([groupId, value]) => ({ groupId, donorId: value.donorId, weight: Number(value.weight) }))
-  };
-}
-
-async function readCandidatePresets(candidates) {
-  const donors = {};
-  const baseSha = String(state.presets.base?.inspect?.sha256 ?? '').toLowerCase();
-  for (const candidate of candidates) {
-    const candidateSha = String(candidate.sha256 ?? '').toLowerCase();
-    if (candidate.useLoadedBase || (state.presets.base?.data && candidateSha && candidateSha === baseSha)) {
-      donors[candidate.id] = state.presets.base.data;
-      continue;
-    }
-    if (!candidate.path) {
-      throw new Error(`Could not locate the preset file for ${candidate.name}. Rescan the library or choose the preset again.`);
-    }
-    const loaded = await apiPost('/api/folder/read', { path: candidate.path }, { timeoutMs: 15000 });
-    donors[candidate.id] = loaded.data;
-  }
-  return donors;
-}
-
-async function createFacePreset() {
-  if (!state.portraits.target?.analysis || !state.presets.base) return;
-  const startedAt = Date.now();
-  const controller = new AbortController();
-  createFaceAbortController = controller;
-  try {
-    state.createFace.stage = 'processing';
-    state.createFace.startedAt = startedAt;
-    state.createFace.lastDurationMs = null;
-    state.createFace.processingStep = 'Analyzing target face...';
-    renderShell();
-
-    const targetMetrics = state.portraits.target.analysis.measurements.normalized;
-    const baseClass = state.presets.base.inspect.classFingerprint;
-    const baseSha = state.presets.base.inspect.sha256.toLowerCase();
-
-    state.createFace.processingStep = 'Scanning compatible profiled references...';
-    renderShell();
-
-    const baseProfile = getProfileForPreset(state.presets.base);
-    const candidates = state.library.items
-      .filter((item) => item.classFingerprint === baseClass && item.sha256.toLowerCase() !== baseSha)
-      .map((item) => ({ ...item, ...(getProfileForPreset(item) ? { analysis: { measurements: { normalized: getProfileForPreset(item).metrics, quality: getProfileForPreset(item).quality } } } : {}) }))
-      .filter((item) => item.analysis?.measurements?.normalized)
-      .map((item, index) => ({
-        id: `ref${index + 1}`,
-        path: item.path,
-        name: item.name,
-        sha256: item.sha256,
-        classFingerprint: item.classFingerprint,
-        analysis: item.analysis,
-        metrics: item.analysis.measurements.normalized
-      }));
-
-    const plan = buildAutomaticPlan({
-      targetMetrics,
-      baseMetrics: baseProfile?.metrics ?? null,
-      candidates
-    });
-
-    if (!plan.selected.length) {
-      state.createFace.stage = 'reference-required';
-      state.createFace.referenceNeeded = plan.warnings[0];
-      state.createFace.autoPlan = null;
-      state.createFace.result = null;
-      state.createFace.candidates = [];
-      state.createFace.warnings = plan.warnings;
-      state.createFace.baseProfileFallback = false;
-      renderShell();
-      return;
-    }
-
-    state.createFace.processingStep = 'Loading selected reference presets...';
-    renderShell();
-    const selected = plan.selected.map((item, index) => ({ ...item, id: item.id || `ref${index + 1}` }));
-    const donors = await readCandidatePresets(selected);
-    state.createFace.processingStep = 'Building and validating the preset...';
-    renderShell();
-    const recipe = automaticRecipeFromPlan(plan);
-    const rawResult = await apiPost('/api/blend', {
-      base: state.presets.base.data,
-      donors,
-      recipe
-    }, {
-      timeoutMs: 25000,
-      signal: controller.signal
-    });
-    const result = assertUsefulBlendResult(rawResult);
-
-    state.createFace.stage = 'result';
-    state.createFace.result = result;
-    state.createFace.autoPlan = plan;
-    state.createFace.candidates = selected;
-    state.createFace.warnings = plan.warnings;
-    state.createFace.baseProfileFallback = false;
-    state.createFace.lastDurationMs = Date.now() - startedAt;
-    state.presets.generated = { name: outputFileName(), data: result.data };
-    state.settings.outputFilename = outputFileName();
-    addActivity(`Created ${outputFileName()} from photo workflow in ${formatDuration(state.createFace.lastDurationMs)}.`);
-    toast(`Face preset created in ${formatDuration(state.createFace.lastDurationMs)}.`, 'success');
-  } catch (error) {
-    state.createFace.stage = 'input';
-    state.createFace.lastDurationMs = Date.now() - startedAt;
-    if (controller.signal.aborted) toast('Create Face was canceled.', 'error');
-    else toast(error.message, 'error');
-  } finally {
-    if (createFaceAbortController === controller) createFaceAbortController = null;
-  }
-  renderShell();
-}
-
-async function rebuildCreateFaceResult() {
-  const plan = state.createFace.autoPlan;
-  if (!plan || !state.presets.base) return;
-  const startedAt = Date.now();
-  try {
-    state.createFace.stage = 'processing';
-    state.createFace.startedAt = startedAt;
-    state.createFace.processingStep = 'Rebuilding the result with your adjustments...';
-    renderShell();
-    const donors = await readCandidatePresets(state.createFace.candidates);
-    const recipe = automaticRecipeFromPlan(plan);
-    const rawResult = await apiPost('/api/blend', {
-      base: state.presets.base.data,
-      donors,
-      recipe
-    }, { timeoutMs: 25000 });
-    const result = assertUsefulBlendResult(rawResult);
-    state.createFace.result = result;
-    state.createFace.lastDurationMs = Date.now() - startedAt;
-    state.createFace.stage = 'result';
-    state.presets.generated = { name: outputFileName(), data: result.data };
-    addActivity(`Rebuilt ${outputFileName()} after adjustments in ${formatDuration(state.createFace.lastDurationMs)}.`);
-    toast(`Adjusted result rebuilt in ${formatDuration(state.createFace.lastDurationMs)}.`, 'success');
-  } catch (error) {
-    state.createFace.stage = 'result';
-    toast(error.message, 'error');
-  }
-  renderShell();
-}
-
-async function generateBlend() {
-
-  if (!state.presets.base || !state.presets.donor) return;
-  try {
-    const recipe = recipeFromState(state, state.status.groups);
-    const result = await apiPost('/api/blend', {
-      base: state.presets.base.data,
-      donors: { donor: state.presets.donor.data },
-      recipe
-    });
-    state.blend.result = result;
-    state.presets.generated = { name: outputFileName(), data: result.data };
-    addActivity(`Created ${outputFileName()} with ${result.changedBlocks.length} changed blocks.`);
-    toast('Merged preset created and binary-validated.', 'success');
-    renderShell();
-  } catch (error) {
-    toast(error.message, 'error');
-  }
-}
-
-async function comparePresets() {
-  try {
-    state.compare = await apiPost('/api/compare', { left: state.presets.labLeft.data, right: state.presets.labRight.data });
-    addActivity(`Compared presets: ${state.compare.changedBlocks.length} blocks differ.`);
-    toast(`${state.compare.changedBlocks.length} changed blocks found.`, 'success');
-    renderShell();
-  } catch (error) {
-    toast(error.message, 'error');
-  }
-}
-
-async function observeCalibration() {
-  const label = document.querySelector('#calibration-label')?.value.trim();
-  if (!label) return toast('Enter a precise calibration label.', 'error');
-  try {
-    const observation = await apiPost('/api/calibration/observe', {
-      before: state.presets.calBefore.data,
-      after: state.presets.calAfter.data,
-      label
-    });
-    state.calibration = calibrationMerge(state.calibration, observation);
-    saveCalibration(state.calibration);
-    addActivity(`Recorded calibration “${label}”: ${observation.changedBlocks.length} blocks.`);
-    toast(`Calibration recorded: ${observation.changedBlocks.length} changed blocks.`, 'success');
-    renderShell();
-  } catch (error) {
-    toast(error.message, 'error');
-  }
-}
-
-async function savePresetResult(encodedData) {
-  try {
-    const result = await apiPost('/api/save', {
-      directory: state.settings.customizationDir,
-      filename: outputFileName(),
-      data: encodedData
-    });
-    addActivity(`Saved generated preset to ${result.path}.`);
-    toast(result.backupPath ? 'Saved. Previous file backed up automatically.' : `Saved to ${result.path}.`, 'success');
-  } catch (error) {
-    toast(error.message, 'error');
-  }
-}
-
-function setAllWeights(value) {
-  for (const group of state.status.groups.filter((item) => !item.protected)) {
-    state.blend.weights[group.id] = value;
-  }
-}
-
-async function handleAction(action) {
-  if (action.startsWith('mix-')) {
-    setAllWeights(Number(action.slice(4)));
-    renderShell();
+async function loadBaseFromLibrary(path) {
+  if (!path) {
+    state.base = null;
+    render();
     return;
   }
+  try {
+    state.base = await apiPost('/api/folder/read', { path }, { timeoutMs: 15000 });
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+  render();
+}
+
+// loadPresetFile round-trips a picked file through the service so it is parsed and
+// validated before the UI treats it as a preset.
+async function loadPresetFile(file) {
+  const local = await readPresetFile(file);
+  const parsed = await apiPost('/api/inspect', { name: local.name, data: local.data }, { timeoutMs: 15000 });
+  return { name: local.name, data: local.data, classId: parsed.classId, characterName: parsed.characterName };
+}
+
+async function generate() {
+  try {
+    const result = await apiPost('/api/generate', {
+      base: state.base.data,
+      measurements: state.photo.measurements.normalized,
+      strength: state.strength / 100,
+      name: state.outputName.slice(0, 16)
+    }, { timeoutMs: 20000 });
+    state.result = result;
+    toast(`Preset built from ${result.applied.length} calibrated slider(s).`, 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+  render();
+}
+
+async function saveToGame(data, filename) {
+  try {
+    const result = await apiPost('/api/save', { filename: safeFilename(filename), data }, { timeoutMs: 20000 });
+    toast(`Saved to ${result.path}${result.backupPath ? ' (previous file backed up)' : ''}`, 'success');
+    await scanLibrary();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function learn(controlId, file) {
+  state.calibrate.busy = controlId;
+  state.calibrate.error = '';
+  state.calibrate.lastLearned = null;
+  render();
+  try {
+    const maxed = await readPresetFile(file);
+    const result = await apiPost('/api/learn', {
+      controlId,
+      base: state.calibrate.base.data,
+      baseName: state.calibrate.base.name,
+      maxed: maxed.data,
+      maxedName: maxed.name,
+      commit: true
+    }, { timeoutMs: 15000 });
+    const control = controls().find((entry) => entry.id === controlId);
+    state.calibrate.lastLearned = `${control?.label ?? controlId} is byte ${result.calibration.offset}.`;
+    for (const warning of result.warnings ?? []) toast(warning, 'info');
+    await refreshStatus();
+  } catch (error) {
+    state.calibrate.error = error.message;
+  } finally {
+    state.calibrate.busy = '';
+    render();
+  }
+}
+
+async function merge() {
+  try {
+    state.merge.result = await apiPost('/api/blend', {
+      base: state.base.data,
+      donor: state.merge.donor.data,
+      weight: state.merge.weight / 100,
+      name: state.outputName.slice(0, 16)
+    }, { timeoutMs: 20000 });
+    toast('Merged preset built.', 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+  render();
+}
+
+async function handleAction(action, element) {
   switch (action) {
-    case 'create-face':
-      await createFacePreset();
-      break;
-    case 'rebuild-create-result':
-      await rebuildCreateFaceResult();
-      break;
-    case 'cancel-create-face':
-      if (createFaceAbortController) createFaceAbortController.abort();
-      state.createFace.stage = 'input';
-      state.createFace.processingStep = '';
-      renderShell();
-      break;
-    case 'toggle-adjustments':
-      state.createFace.adjustmentsOpen = !state.createFace.adjustmentsOpen;
-      renderShell();
-      break;
-    case 'start-over-create':
-      resetCreateFaceFlow(false);
-      renderShell();
-      break;
-    case 'open-library-profile-help':
-      state.activeView = 'library';
-      renderShell();
-      break;
-    case 'generate':
-      await generateBlend();
-      break;
-    case 'compare':
-      await comparePresets();
-      break;
-    case 'reset-weights':
-      setAllWeights(50);
-      renderShell();
-      break;
-    case 'scan-library':
-      await scanLibrary();
-      break;
-    case 'observe-calibration':
-      await observeCalibration();
-      break;
+    case 'scan-library': await scanLibrary(); break;
+    case 'clear-photo': state.photo = null; render(); break;
+    case 'open-calibrate': state.panel = 'calibrate'; render(); break;
+    case 'open-merge': state.panel = 'merge'; render(); break;
+    case 'close-panel': state.panel = null; render(); break;
+    case 'generate': await generate(); break;
+    case 'save-result': await saveToGame(state.result.data, state.outputName); break;
     case 'download-result':
-      if (state.blend.result) downloadBytes(base64ToBytes(state.blend.result.data), outputFileName());
+      downloadBytes(base64ToBytes(state.result.data), safeFilename(state.outputName));
       break;
-    case 'download-create-result':
-      if (state.createFace.result) downloadBytes(base64ToBytes(state.createFace.result.data), outputFileName());
+    case 'save-merge': await saveToGame(state.merge.result.data, `${state.outputName} merge`); break;
+    case 'download-merge':
+      downloadBytes(base64ToBytes(state.merge.result.data), safeFilename(`${state.outputName} merge`));
       break;
-    case 'download-sidecar': {
-      const sidecar = state.createFace.result?.sidecar ?? state.blend.result?.sidecar;
-      if (sidecar) downloadText(sidecar, `${outputFileName()}.faceforge-bdo.json`);
-      break;
-    }
-    case 'save-result':
-      if (state.blend.result) await savePresetResult(state.blend.result.data);
-      break;
-    case 'save-create-result':
-      if (state.createFace.result) await savePresetResult(state.createFace.result.data);
-      break;
-    case 'export-calibration':
-      downloadText(JSON.stringify(state.calibration, null, 2), 'FaceForge-BDO-Calibration.json');
+    case 'forget':
+      try {
+        await api(`/api/slidermap?controlId=${encodeURIComponent(element.dataset.control)}`, { method: 'DELETE', timeoutMs: 10000 });
+        await refreshStatus();
+        render();
+      } catch (error) { toast(error.message, 'error'); }
       break;
     case 'shutdown':
-      try { await apiPost('/api/shutdown'); } catch { /* service may close before response is consumed */ }
-      root.innerHTML = '<div class="boot-screen"><div class="boot-mark">FF</div><h1>FaceForge BDO closed</h1><p>The desktop window will close automatically.</p></div>';
+      try { await apiPost('/api/shutdown'); } catch { /* the service may close before replying */ }
       break;
+    default: break;
   }
 }
 
-root.addEventListener('click', async (event) => {
-  const navTarget = event.target.closest('[data-nav]');
-  if (navTarget) {
-    state.activeView = navTarget.dataset.nav;
-    renderShell();
-    return;
-  }
-  const action = event.target.closest('[data-action]');
-  if (action) {
-    await handleAction(action.dataset.action);
-    return;
-  }
-  const clearPreset = event.target.closest('[data-clear-preset]');
-  if (clearPreset) {
-    state.presets[clearPreset.dataset.clearPreset] = null;
-    state.compare = null;
-    state.blend.result = null;
-    if (clearPreset.dataset.clearPreset === 'base') resetCreateFaceFlow(true);
-    renderShell();
-    return;
-  }
-  const clearPortrait = event.target.closest('[data-clear-portrait]');
-  if (clearPortrait) {
-    const item = state.portraits[clearPortrait.dataset.clearPortrait];
-    if (item?.preview) URL.revokeObjectURL(item.preview);
-    state.portraits[clearPortrait.dataset.clearPortrait] = null;
-    if (clearPortrait.dataset.clearPortrait === 'target') resetCreateFaceFlow(true);
-    renderShell();
-    return;
-  }
-  const block = event.target.closest('[data-block]');
-  if (block) {
-    selectedBlock = Number(block.dataset.block);
-    renderShell();
-    return;
-  }
-  const library = event.target.closest('[data-library-load]');
-  if (library) {
-    await loadLibraryPreset(library.dataset.libraryLoad, library.dataset.librarySlot, library.dataset.libraryView);
-    return;
-  }
-  const deletion = event.target.closest('[data-delete-calibration]');
-  if (deletion) {
-    delete state.calibration.observations[deletion.dataset.deleteCalibration];
-    saveCalibration(state.calibration);
-    renderShell();
-    return;
-  }
-  const removeProfile = event.target.closest('[data-remove-profile]');
-  if (removeProfile) {
-    state.referenceCatalog = removeReferenceProfile(state.referenceCatalog, removeProfile.dataset.removeProfile);
-    try {
-      await persistReferenceCatalog();
-      toast('Reference profile removed.', 'success');
-    } catch (error) {
-      toast(`Could not save the profile catalog: ${error.message}`, 'error');
-    }
-    renderShell();
-  }
+// ------------------------------------------------------------------- events
+
+root.addEventListener('click', (event) => {
+  const target = event.target.closest('[data-action]');
+  if (!target || target.disabled) return;
+  void handleAction(target.dataset.action, target);
 });
 
 root.addEventListener('change', async (event) => {
-  const presetInput = event.target.closest('[data-preset-input]');
-  if (presetInput?.files?.[0]) {
-    await loadPreset(presetInput.dataset.presetInput, presetInput.files[0]);
+  const input = event.target;
+  const file = input.files?.[0];
+
+  if (input.dataset.input === 'photo' && file) { await loadPhoto(file); return; }
+  if (input.dataset.input === 'base-select') { await loadBaseFromLibrary(input.value); return; }
+  if (input.dataset.input === 'base-file' && file) {
+    try { state.base = await loadPresetFile(file); render(); }
+    catch (error) { toast(error.message, 'error'); }
     return;
   }
-  const portraitInput = event.target.closest('[data-portrait-input]');
-  if (portraitInput?.files?.[0]) {
-    await loadPortrait(portraitInput.dataset.portraitInput, portraitInput.files[0]);
-    return;
-  }
-  const profileInput = event.target.closest('[data-profile-input]');
-  if (profileInput?.files?.[0]) {
-    await attachReferenceScreenshot(profileInput.dataset.profileInput, profileInput.files[0]);
-    return;
-  }
-  const weight = event.target.closest('[data-weight]');
-  if (weight) {
-    state.blend.weights[weight.dataset.weight] = Number(weight.value);
-    renderShell();
-    return;
-  }
-  const createWeight = event.target.closest('[data-create-weight]');
-  if (createWeight) {
-    if (state.createFace.autoPlan?.groups?.[createWeight.dataset.createWeight]) {
-      state.createFace.autoPlan.groups[createWeight.dataset.createWeight].weight = Number(createWeight.value);
-    }
-    renderShell();
-    return;
-  }
-  const setting = event.target.closest('[data-setting]');
-  if (setting) {
-    if (setting.dataset.setting === 'cross-class') state.blend.allowCrossClass = setting.checked;
-    else if (setting.dataset.setting === 'blend-seed') state.blend.seed = setting.value;
-    else if (setting.dataset.setting === 'customization-dir') state.settings.customizationDir = setting.value;
-    else if (setting.dataset.setting === 'output-filename') state.settings.outputFilename = setting.value;
-    else if (setting.dataset.setting === 'library-search') state.settings.librarySearch = setting.value;
-    else if (setting.dataset.setting === 'library-profiled-only') state.settings.libraryProfiledOnly = setting.checked;
-    renderShell();
-    return;
-  }
-  const importInput = event.target.closest('[data-import-calibration]');
-  if (importInput?.files?.[0]) {
+  if (input.dataset.input === 'calibrate-base' && file) {
     try {
-      const parsed = JSON.parse(await importInput.files[0].text());
-      if (!parsed || typeof parsed.observations !== 'object') throw new Error('Not a FaceForge BDO calibration database.');
-      state.calibration = parsed;
-      saveCalibration(parsed);
-      toast('Calibration database imported.', 'success');
-      renderShell();
-    } catch (error) {
-      toast(error.message, 'error');
-    }
+      state.calibrate.base = await loadPresetFile(file);
+      state.calibrate.error = '';
+      render();
+    } catch (error) { state.calibrate.error = error.message; render(); }
+    return;
   }
+  if (input.dataset.input === 'donor-file' && file) {
+    try { state.merge.donor = await loadPresetFile(file); render(); }
+    catch (error) { toast(error.message, 'error'); }
+    return;
+  }
+  if (input.dataset.learn && file) { await learn(input.dataset.learn, file); }
 });
 
 root.addEventListener('input', (event) => {
-  const weight = event.target.closest('[data-weight]');
-  if (weight) {
-    state.blend.weights[weight.dataset.weight] = Number(weight.value);
-    const display = weight.parentElement.querySelector('.slider-value');
-    if (display) display.textContent = `${weight.value}%`;
-  }
-  const createWeight = event.target.closest('[data-create-weight]');
-  if (createWeight) {
-    if (state.createFace.autoPlan?.groups?.[createWeight.dataset.createWeight]) {
-      state.createFace.autoPlan.groups[createWeight.dataset.createWeight].weight = Number(createWeight.value);
+  const input = event.target;
+  switch (input.dataset.input) {
+    case 'strength': {
+      state.strength = Number(input.value);
+      const label = input.previousElementSibling;
+      if (label) label.textContent = `Match strength — how far to move toward the photo (${state.strength}%)`;
+      break;
     }
-    const display = createWeight.parentElement.querySelector('.slider-value');
-    if (display) display.textContent = `${createWeight.value}%`;
+    case 'merge-weight': {
+      state.merge.weight = Number(input.value);
+      const label = input.previousElementSibling;
+      if (label) label.textContent = `Donor weight (${state.merge.weight}%)`;
+      break;
+    }
+    case 'output-name':
+      state.outputName = input.value;
+      break;
+    default: break;
   }
 });
 
-for (const type of ['dragenter', 'dragover']) {
-  root.addEventListener(type, (event) => {
-    const zone = event.target.closest('[data-drop-preset], [data-drop-portrait]');
-    if (!zone) return;
-    event.preventDefault();
-    zone.classList.add('dragging');
-  });
-}
-for (const type of ['dragleave', 'drop']) {
-  root.addEventListener(type, async (event) => {
-    const zone = event.target.closest('[data-drop-preset], [data-drop-portrait]');
-    if (!zone) return;
-    event.preventDefault();
-    zone.classList.remove('dragging');
-    if (type !== 'drop' || !event.dataTransfer?.files?.[0]) return;
-    if (zone.dataset.dropPreset) await loadPreset(zone.dataset.dropPreset, event.dataTransfer.files[0]);
-    else await loadPortrait(zone.dataset.dropPortrait, event.dataTransfer.files[0]);
-  });
-}
+// Drag and drop straight onto the window, so the common case is one gesture.
+root.addEventListener('dragover', (event) => { event.preventDefault(); });
+root.addEventListener('drop', async (event) => {
+  event.preventDefault();
+  const file = event.dataTransfer?.files?.[0];
+  if (!file) return;
+  if (file.type.startsWith('image/')) { await loadPhoto(file); return; }
+  try { state.base = await loadPresetFile(file); render(); }
+  catch (error) { toast(error.message, 'error'); }
+});
 
 async function start() {
   if (!hasToken()) {
     root.className = 'boot-screen';
-    root.innerHTML = `<div class="boot-mark">FF</div><h1>Launch token missing</h1><p>Open FaceForge BDO from its EXE, not by opening this page directly.</p><div class="field" style="width:360px;margin:10px auto 0"><input id="manual-token" class="input" placeholder="Developer token"><button class="button" id="manual-connect">Connect</button></div>`;
-    document.querySelector('#manual-connect')?.addEventListener('click', async () => {
-      setToken(document.querySelector('#manual-token').value.trim());
-      await start();
-    }, { once: true });
+    root.innerHTML = '<div class="boot-mark">FF</div><h1>FaceForge BDO</h1><p>Launch FaceForge BDO from its EXE so it can hand this window its session token.</p>';
     return;
   }
   try {
-    const status = await apiGet('/api/status');
-    state = createInitialState(status);
-    try {
-      state.referenceCatalog = await apiGet('/api/reference-catalog', { timeoutMs: 10000 });
-      saveReferenceCatalog(state.referenceCatalog);
-    } catch (catalogError) {
-      addActivity(`Reference catalog could not be loaded: ${catalogError.message}`, 'error');
-    }
-    addActivity(`Connected to FaceForge BDO ${status.version}.`);
-    renderShell();
-    scanLibrary();
+    await refreshStatus();
+    render();
+    await scanLibrary();
   } catch (error) {
     root.className = 'boot-screen';
-    root.innerHTML = `<div class="boot-mark">FF</div><h1>Could not connect</h1><p>${escapeHTML(error.message)}</p>`;
+    root.innerHTML = `<div class="boot-mark">FF</div><h1>FaceForge BDO</h1><p>${escapeHTML(error.message)}</p>`;
   }
 }
 
-start();
+void start();

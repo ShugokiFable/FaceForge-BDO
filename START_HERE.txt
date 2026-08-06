@@ -1,47 +1,56 @@
-FACEFORGE BDO 0.6.0
+FACEFORGE BDO 0.7.0
 ===================
 
 RUN THE APP
 -----------
 Double-click:
-  FaceForge BDO 0.6.0 - STANDALONE.exe
+  FaceForge BDO 0.7.0 - STANDALONE.exe
 
-The EXE opens a dedicated FaceForge BDO desktop window.
-It does not open your normal browser. Close the window or use Settings > Exit FaceForge BDO when finished.
+The EXE opens a dedicated FaceForge BDO desktop window (WebView2).
+It does not open your normal browser. Close the window when finished.
 
 NORMAL WORKFLOW
 ---------------
-1. Create Face
-   - Choose the target face image.
-   - Load a starting BDO preset.
-   - Click Create Face Preset.
-   - Save directly to BDO or download the generated preset.
+1. Target photo
+   - Choose a front-facing photo of the face you want.
+   - Analysis runs locally on this PC (MediaPipe). Nothing is uploaded.
 
-2. Build your reference library once
-   - Open Preset Library.
-   - Scan the BDO customization folder.
-   - For presets you may want FaceForge to learn from, click Add Screenshot.
-   - Attach one clean in-game screenshot of that preset.
+2. Starting preset
+   - Pick a BDO customization file that already works in game.
+   - Its class, hair, makeup, colours, and uncalibrated sliders are kept.
 
-3. Adjust if needed
-   - Open Adjust Result on the generated result card.
-   - Supported facial groups are already prefilled.
-   - Unsupported groups stay at 0% unless you change them.
+3. Create Preset
+   - Only calibrated sliders are rewritten from photo measurements.
+   - The main screen shows how many of the 12 controls are calibrated.
+   - Save to BDO Customization or download the file.
 
-MORE TOOLS
-----------
-Merge Presets, Preset Laboratory, and Calibration are under More Tools.
-They are optional and no longer block the normal Create Face workflow.
+FIRST-TIME CALIBRATION (required for photo matching)
+----------------------------------------------------
+Open the Calibrate panel. For each control:
+
+  1. Load a base preset.
+  2. In BDO creator, drag ONLY that one named slider to maximum and save.
+  3. Load the maxed preset into FaceForge Learn.
+  4. FaceForge records the single moved byte (or lists candidates if ambiguous).
+
+Calibration is stored in:
+  %LOCALAPPDATA%\FaceForge BDO\slidermap.json
+
+You can also place a slidermap.json next to the EXE to seed a fresh install.
+
+OPTIONAL MERGE
+--------------
+The Merge panel mixes only the slider region between same-class presets.
+Cross-class donors are refused.
 
 BACKUPS
 -------
 Overwriting an existing preset creates a timestamped backup under:
   .FaceForge BDO Backups
+inside the Customization folder.
 
 BUILD FROM SOURCE
 -----------------
-This clean source pack intentionally contains no old repair, retry, push, or publishing BAT files.
-
 Requirements:
   Go 1.22+
   Node.js 20+

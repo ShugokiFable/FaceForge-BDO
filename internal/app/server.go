@@ -12,23 +12,28 @@ import (
 
 const (
 	ProductName = "FaceForge BDO"
-	Version     = "0.6.0"
+	Version     = "0.7.0"
 	TokenHeader = "X-FaceForge-Token"
 	maxBodySize = 8 << 20
 )
 
 type Config struct {
-	Token                string
-	Schema               preset.Schema
-	CustomizationDir     string
-	ReferenceCatalogPath string
-	StaticFS             fs.FS
-	Shutdown             func()
+	Token            string
+	CustomizationDir string
+	SliderMapPath    string
+	StaticFS         fs.FS
+	Shutdown         func()
 }
 
 type server struct {
 	config Config
 	mux    *http.ServeMux
+}
+
+// sliders reads the calibration map fresh on each request, so a Learn result is
+// live for the very next generation without restarting the app.
+func (s *server) sliders() (preset.SliderMap, error) {
+	return preset.LoadSliderMap(s.config.SliderMapPath)
 }
 
 func NewHandler(config Config) http.Handler {

@@ -42,7 +42,7 @@ try {
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 }
 
-@('README.md', 'START_HERE.txt', 'CHANGELOG.md', 'QA_REPORT.md', 'THIRD_PARTY_NOTICES.md', 'LICENSE') | ForEach-Object { Copy-Item $_ -Destination $artifactDir -Force }
+@('README.md', 'START_HERE.txt', 'CHANGELOG.md', 'QA_REPORT.md', 'LAYOUT.md', 'THIRD_PARTY_NOTICES.md', 'LICENSE') | ForEach-Object { Copy-Item $_ -Destination $artifactDir -Force }
 
 $exe = Join-Path $artifactDir "FaceForge BDO $Version - STANDALONE.exe"
 $manifest = Join-Path $artifactDir 'SHA256SUMS.txt'
