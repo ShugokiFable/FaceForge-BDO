@@ -12,7 +12,7 @@ import (
 
 const (
 	ProductName = "FaceForge BDO"
-	Version     = "0.7.0"
+	Version     = "0.7.1"
 	TokenHeader = "X-FaceForge-Token"
 	maxBodySize = 8 << 20
 )

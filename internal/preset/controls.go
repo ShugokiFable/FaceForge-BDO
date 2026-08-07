@@ -6,7 +6,8 @@ package preset
 // proportion the bundled face landmarker can actually measure. Adding controls
 // beyond that would mean inventing a target value for them, so we do not.
 //
-// Metric names must match the keys produced by web/js/face-analysis.js.
+// Metric names must match METRIC_NAMES in web/js/face-analysis.js, which are
+// measurement keys from the bundled Skyrim FaceForge analyzer.
 // Instruction is shown verbatim in the Learn panel, so it has to name a slider
 // the user can actually find in Black Desert's creator.
 type Control struct {
@@ -35,12 +36,12 @@ var Controls = []Control{
 		Instruction: "Face Shape → jaw → drag width to its maximum (widest jaw).",
 	},
 	{
-		ID: "chin_length", Label: "Chin length", Metric: "lowerFace", Section: "Face Shape",
-		Instruction: "Face Shape → chin → drag length to its maximum (longest chin).",
+		ID: "chin_width", Label: "Chin width", Metric: "chinWidth", Section: "Face Shape",
+		Instruction: "Face Shape → chin → drag width to its maximum (widest chin).",
 	},
 	{
-		ID: "forehead_height", Label: "Forehead height", Metric: "foreheadHeight", Section: "Face Shape",
-		Instruction: "Face Shape → forehead → drag height to its maximum (tallest forehead).",
+		ID: "chin_length", Label: "Chin length", Metric: "lowerFace", Section: "Face Shape",
+		Instruction: "Face Shape → chin → drag length to its maximum (longest chin).",
 	},
 	{
 		ID: "eye_size", Label: "Eye size", Metric: "eyeOpenness", Section: "Eyes",
@@ -51,7 +52,7 @@ var Controls = []Control{
 		Instruction: "Eyes → drag the spacing/distance slider to its maximum (eyes furthest apart).",
 	},
 	{
-		ID: "eye_angle", Label: "Eye angle", Metric: "eyeAngle", Section: "Eyes",
+		ID: "eye_angle", Label: "Eye angle", Metric: "eyeTilt", Section: "Eyes",
 		Instruction: "Eyes → drag the angle/tilt slider to its maximum (outer corners highest).",
 	},
 	{
@@ -63,11 +64,15 @@ var Controls = []Control{
 		Instruction: "Nose → drag width to its maximum (widest nose).",
 	},
 	{
+		ID: "nose_length", Label: "Nose length", Metric: "noseLength", Section: "Nose",
+		Instruction: "Nose → drag length to its maximum (longest nose).",
+	},
+	{
 		ID: "mouth_width", Label: "Mouth width", Metric: "mouthWidth", Section: "Mouth",
 		Instruction: "Mouth → drag width to its maximum (widest mouth).",
 	},
 	{
-		ID: "lip_thickness", Label: "Lip thickness", Metric: "lipThickness", Section: "Mouth",
+		ID: "lip_thickness", Label: "Lip thickness", Metric: "lipFullness", Section: "Mouth",
 		Instruction: "Mouth → drag lip thickness/volume to its maximum (fullest lips).",
 	},
 }

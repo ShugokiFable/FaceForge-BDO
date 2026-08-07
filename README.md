@@ -12,16 +12,26 @@ Windows-first. One standalone EXE. No game injection, process memory access, mac
 
 FaceForge BDO reads Black Desert customization format **version 20** files (fixed **924-byte** records), decrypts the Thin-ICE ciphertext, edits plaintext bytes that have been measured on a real corpus, re-encrypts, and validates by re-parsing before export or save.
 
-Version **0.7.0** dropped the old block-region map and the reference-library Create Face path. Photo matching now drives only **calibrated** sliders from local face measurements. Everything else (class, face type, hair, makeup, colours, body, uncalibrated sliders) is copied byte-for-byte from your starting preset.
+Photo matching drives only **calibrated** sliders from local face measurements. Everything else (class, face type, hair, makeup, colours, body, uncalibrated sliders) is copied byte-for-byte from your starting preset.
 
 ### Create Face
 
-1. Choose a front-facing target photo (analyzed locally with the bundled MediaPipe Face Landmarker).
+1. Choose a front-facing target photo (analyzed locally — nothing is uploaded).
 2. Choose a starting preset that already works in game.
 3. Click **Create Preset** — calibrated controls are written from measured proportions; uncalibrated bytes stay on the base.
 4. Save to the BDO Customization folder or download the file.
 
-The main screen always shows how many of the **12** catalogue controls are calibrated. It never pretends uncalibrated sliders can be inferred from a photo alone.
+The main screen always shows how many of the **13** catalogue controls are calibrated. It never pretends uncalibrated sliders can be inferred from a photo alone.
+
+### Face measurement (0.7.1+)
+
+Landmarks still come from the bundled MediaPipe Face Landmarker. Geometry is handled by **Skyrim FaceForge’s** measurement pipeline, vendored as `web/js/skyrim-face.js` from `web/vendor-src/`:
+
+- head-pose estimation and perspective / foreshortening correction
+- mirror averaging and per-measurement trust fading
+- **baselines** from real neutral heads (not invented min/max windows)
+
+Each BDO slider position is the **deviation from baseline**, mid at 50, tanh-compressed so strong faces approach end stops without pinning.
 
 ### Calibrate (Learn)
 
@@ -57,18 +67,32 @@ Optional panel under the main workflow. Mixes only the slider region (bytes 98�
 
 ICE 8-byte blocks are a **cipher** unit only. FaceForge never treats whole blocks as single features. Full notes: `LAYOUT.md`.
 
-### Controls catalogue (12)
+### Controls catalogue (13)
 
-Each control maps one MediaPipe-derived metric to one in-game slider once calibrated:
+Each control maps one analyzer metric to one in-game slider once calibrated:
 
-Face length, cheekbone width, jaw width, chin length, forehead height, eye size, eye spacing, eye angle, eyebrow height, nose width, mouth width, lip thickness.
+| Control | Metric |
+|---|---|
+| Face length | `faceAspect` |
+| Cheekbone width | `cheekWidth` |
+| Jaw width | `jawWidth` |
+| Chin width | `chinWidth` |
+| Chin length | `lowerFace` |
+| Eye size | `eyeOpenness` |
+| Eye spacing | `eyeSpacing` |
+| Eye angle | `eyeTilt` |
+| Eyebrow height | `browHeight` |
+| Nose width | `noseWidth` |
+| Nose length | `noseLength` |
+| Mouth width | `mouthWidth` |
+| Lip thickness | `lipFullness` |
 
 ## Run the release
 
 Download the current standalone EXE from the [GitHub Releases](https://github.com/ShugokiFable/FaceForge-BDO/releases) page:
 
 ```text
-FaceForge BDO 0.7.0 - STANDALONE.exe
+FaceForge BDO 0.7.1 - STANDALONE.exe
 ```
 
 Double-click it. The EXE opens a dedicated FaceForge BDO desktop window (WebView2) and keeps its private token-protected service bound to `127.0.0.1` only. Close the window when finished.
@@ -90,7 +114,7 @@ Requirements:
 Output:
 
 ```text
-artifacts\FaceForge BDO 0.7.0 - STANDALONE.exe
+artifacts\FaceForge BDO 0.7.1 - STANDALONE.exe
 ```
 
 Full local package (EXE + source zip + release zip + checksums):
@@ -99,6 +123,8 @@ Full local package (EXE + source zip + release zip + checksums):
 .\package.ps1
 ```
 
+The committed `web/js/skyrim-face.js` is the pre-bundled analyzer. Rebuild it from `web/vendor-src/` with esbuild only when those TypeScript sources change.
+
 ## Source layout
 
 ```text
@@ -106,7 +132,8 @@ cmd/faceforge-bdo/     Portable desktop host (embedded WebView2 loader)
 internal/preset/       Parser, ICE crypto, controls, learn, generate, merge
 internal/storage/      Customization folder discovery, scan, atomic save, backups
 internal/app/          Token-protected local JSON API
-web/                   Embedded offline UI + MediaPipe face analysis
+web/                   Embedded offline UI + MediaPipe + Skyrim analyzer bundle
+web/vendor-src/        Upstream Skyrim FaceForge domain sources for rebundling
 samples/               Research presets
 testdata/presets/      Fixtures for automated tests
 scripts/               Native-window smoke helpers

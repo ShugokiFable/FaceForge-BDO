@@ -1,24 +1,42 @@
-// Each entry is the [min, max] raw ratio that maps to slider 0 and slider 100.
-// These are the tuning knobs of the whole tool: they decide how an ordinary face
-// lands on BDO's 0-100 scale. They are approximate windows over normal human
-// variation, not measured constants, so widen a pair if real photos keep pinning
-// a slider to an extreme. There is one entry per control in internal/preset/controls.go.
-const METRIC_RANGES = Object.freeze({
-  faceAspect: [1.0, 1.65],
-  cheekWidth: [0.62, 0.88],
-  jawWidth: [0.52, 0.92],
-  lowerFace: [0.30, 0.55],
-  foreheadHeight: [0.22, 0.42],
-  eyeOpenness: [0.10, 0.38],
-  eyeSpacing: [0.16, 0.32],
-  eyeAngle: [-0.10, 0.18],
-  browHeight: [0.055, 0.13],
-  noseWidth: [0.14, 0.30],
-  mouthWidth: [0.28, 0.54],
-  lipThickness: [0.28, 0.62]
-});
+import { measureFace, measurementBaselines } from './skyrim-face.js';
 
-export const METRIC_NAMES = Object.freeze(Object.keys(METRIC_RANGES));
+// The measurement pipeline is Skyrim FaceForge's, bundled verbatim from
+// src/FaceForge.Web/src/domain into js/skyrim-face.js. It estimates head pose,
+// undoes perspective foreshortening, mirror-averages the mesh, and fades each
+// measurement toward neutral by how much it can be trusted. That is why a photo
+// that is not perfectly square-on still measures sensibly.
+//
+// Crucially it also carries measurementBaselines: what each proportion reads on a
+// real neutral head, measured from rendered heads rather than guessed. A BDO
+// slider is therefore the *deviation from that baseline*, not a position inside an
+// invented min/max window.
+
+// METRIC_NAMES are the measurement keys FaceForge BDO drives sliders from. Each
+// one must also appear as a Control metric in internal/preset/controls.go.
+export const METRIC_NAMES = Object.freeze([
+  'faceAspect', 'cheekWidth', 'jawWidth', 'chinWidth', 'lowerFace',
+  'eyeOpenness', 'eyeSpacing', 'eyeTilt', 'browHeight',
+  'noseWidth', 'noseLength', 'mouthWidth', 'lipFullness'
+]);
+
+// How far a face has to deviate from the neutral baseline to approach an end stop.
+// 0.30 means a proportion 30% away from neutral lands at about 88/100. This is the
+// tuning knob: lower it if real photos come out too timid, raise it if sliders pin.
+const SLIDER_SPREAD = 0.30;
+
+// eyeTilt's baseline is 0 (a neutral face has no canthal tilt), so it cannot be
+// expressed as a ratio and maps on an absolute scale instead.
+const TILT_SCALE = 0.10;
+
+/** Converts one Skyrim measurement into a 0..1 BDO slider position. */
+export function toSliderPosition(key, value) {
+  const baseline = measurementBaselines[key];
+  if (!Number.isFinite(value)) return 0.5;
+  const deviation = Math.abs(baseline) < 1e-6
+    ? value / TILT_SCALE
+    : (value / baseline) - 1;
+  return clamp01(0.5 + 0.5 * Math.tanh(deviation / SLIDER_SPREAD));
+}
 
 export const clamp01 = (value) => Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
 
@@ -28,75 +46,41 @@ export const normalizeRange = (value, minimum, maximum) => {
   return clamp01((value - minimum) / (maximum - minimum));
 };
 
-const distance = (a, b) => Math.hypot((a?.x ?? 0) - (b?.x ?? 0), (a?.y ?? 0) - (b?.y ?? 0));
-const midpoint = (a, b) => ({ x: ((a?.x ?? 0) + (b?.x ?? 0)) / 2, y: ((a?.y ?? 0) + (b?.y ?? 0)) / 2 });
-const safeDivide = (value, divisor) => Math.abs(divisor) < 1e-9 ? 0 : value / divisor;
-
-export function measureLandmarks(points) {
-  if (!Array.isArray(points) || points.length < 455) {
-    throw new TypeError('At least 455 MediaPipe face landmarks are required.');
+/**
+ * Measures a face and converts it into BDO slider positions.
+ *
+ * All of the geometry is Skyrim FaceForge's measureFace: pose estimation,
+ * perspective correction, mirror averaging and trust fading happen in there. This
+ * function only turns its 39 measurements into the subset of 0..1 slider positions
+ * FaceForge BDO has controls for.
+ */
+export function measureLandmarks(points, blendshapes = {}, sourceAspectRatio = 1) {
+  if (!Array.isArray(points) || points.length < 468) {
+    throw new TypeError('At least 468 MediaPipe face landmarks are required.');
   }
 
-  const faceWidth = distance(points[234], points[454]);
-  const faceHeight = distance(points[10], points[152]);
-  const leftEyeWidth = distance(points[33], points[133]);
-  const rightEyeWidth = distance(points[362], points[263]);
-  const averageEyeWidth = (leftEyeWidth + rightEyeWidth) / 2;
-  const leftEyeOpen = distance(points[159], points[145]);
-  const rightEyeOpen = distance(points[386], points[374]);
-  const leftEyeCenter = midpoint(points[33], points[133]);
-  const rightEyeCenter = midpoint(points[362], points[263]);
-  const eyeLineWidth = distance(leftEyeCenter, rightEyeCenter);
-  const facialCenterX = ((points[234]?.x ?? 0) + (points[454]?.x ?? 0)) / 2;
-  const noseCenterX = ((points[98]?.x ?? 0) + (points[327]?.x ?? 0)) / 2;
-
-  const mouthWidth = distance(points[61], points[291]);
-
-  // Canthal tilt: positive when the outer eye corner sits above the inner one.
-  // Averaging the two eyes cancels head roll, because a roll raises one eye's
-  // outer corner by exactly what it lowers the other's.
-  const leftTilt = (points[133]?.y ?? 0) - (points[33]?.y ?? 0);
-  const rightTilt = (points[362]?.y ?? 0) - (points[263]?.y ?? 0);
-
-  const leftBrowGap = distance(points[105], leftEyeCenter);
-  const rightBrowGap = distance(points[334], rightEyeCenter);
-
-  const raw = {
-    faceAspect: safeDivide(faceHeight, faceWidth),
-    cheekWidth: safeDivide(distance(points[116], points[345]), faceWidth),
-    jawWidth: safeDivide(distance(points[172], points[397]), faceWidth),
-    lowerFace: safeDivide(distance(points[2], points[152]), faceHeight),
-    foreheadHeight: safeDivide(distance(points[10], points[9]), faceHeight),
-    eyeOpenness: safeDivide((leftEyeOpen + rightEyeOpen) / 2, averageEyeWidth),
-    eyeSpacing: safeDivide(distance(points[133], points[362]), faceWidth),
-    eyeAngle: safeDivide((leftTilt + rightTilt) / 2, averageEyeWidth),
-    browHeight: safeDivide((leftBrowGap + rightBrowGap) / 2, faceHeight),
-    noseWidth: safeDivide(distance(points[98], points[327]), faceWidth),
-    mouthWidth: safeDivide(mouthWidth, faceWidth),
-    lipThickness: safeDivide(distance(points[0], points[17]), mouthWidth)
-  };
-
-  const normalized = Object.fromEntries(
-    Object.entries(raw).map(([key, value]) => {
-      const [minimum, maximum] = METRIC_RANGES[key];
-      return [key, normalizeRange(value, minimum, maximum)];
-    })
-  );
-
-  const centerPenalty = clamp01(safeDivide(Math.abs(noseCenterX - facialCenterX), faceWidth * 0.12));
-  const eyeWidthPenalty = clamp01(safeDivide(Math.abs(leftEyeWidth - rightEyeWidth), averageEyeWidth * 0.45));
-  const eyeHeightPenalty = clamp01(safeDivide(Math.abs(leftEyeOpen - rightEyeOpen), Math.max(leftEyeOpen, rightEyeOpen, 1e-9) * 0.65));
-  const symmetry = clamp01(1 - (centerPenalty * 0.55 + eyeWidthPenalty * 0.25 + eyeHeightPenalty * 0.20));
-  const rollDegrees = Math.atan2(rightEyeCenter.y - leftEyeCenter.y, rightEyeCenter.x - leftEyeCenter.x) * 180 / Math.PI;
+  const analysis = measureFace(points, blendshapes, sourceAspectRatio);
+  const raw = {};
+  const normalized = {};
+  const trust = {};
+  for (const key of METRIC_NAMES) {
+    const measurement = analysis.measurements[key];
+    if (!measurement) continue;
+    raw[key] = measurement.value;
+    normalized[key] = toSliderPosition(key, measurement.value);
+    trust[key] = analysis.trust?.[key] ?? 1;
+  }
 
   return {
     raw,
     normalized,
+    trust,
+    warnings: analysis.warnings ?? [],
     quality: {
-      symmetry,
-      rollDegrees,
-      faceCoverage: clamp01(faceWidth * faceHeight * 3.5),
-      eyeLineWidth
+      symmetry: analysis.symmetry,
+      rollDegrees: analysis.rollDegrees,
+      yawOffset: analysis.yawOffset,
+      correction: analysis.correction
     }
   };
 }
@@ -249,9 +233,17 @@ export async function analyzeFaceImage(image) {
           if (!result.faceLandmarks?.length) continue;
           const selectedIndex = selectPrimaryFace(result.faceLandmarks);
           const landmarks = result.faceLandmarks[selectedIndex];
+          // measureFace corrects for pose, so it needs the aspect ratio of the
+          // image the landmarks came from and the blendshapes that reveal how
+          // much of a proportion is expression rather than face shape.
+          const { width, height } = imageSize(candidate);
+          const blendshapes = Object.fromEntries(
+            (result.faceBlendshapes?.[selectedIndex]?.categories ?? [])
+              .map((category) => [category.categoryName, category.score])
+          );
           return {
             landmarks,
-            measurements: measureLandmarks(landmarks),
+            measurements: measureLandmarks(landmarks, blendshapes, height > 0 ? width / height : 1),
             candidates: result.faceLandmarks.length,
             selectedIndex,
             strategy: lenient

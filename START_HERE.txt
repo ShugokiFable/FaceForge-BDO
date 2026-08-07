@@ -1,10 +1,10 @@
-FACEFORGE BDO 0.7.0
+FACEFORGE BDO 0.7.1
 ===================
 
 RUN THE APP
 -----------
 Double-click:
-  FaceForge BDO 0.7.0 - STANDALONE.exe
+  FaceForge BDO 0.7.1 - STANDALONE.exe
 
 The EXE opens a dedicated FaceForge BDO desktop window (WebView2).
 It does not open your normal browser. Close the window when finished.
@@ -13,7 +13,8 @@ NORMAL WORKFLOW
 ---------------
 1. Target photo
    - Choose a front-facing photo of the face you want.
-   - Analysis runs locally on this PC (MediaPipe). Nothing is uploaded.
+   - Analysis runs locally on this PC (MediaPipe + Skyrim FaceForge geometry).
+   - Nothing is uploaded.
 
 2. Starting preset
    - Pick a BDO customization file that already works in game.
@@ -21,12 +22,12 @@ NORMAL WORKFLOW
 
 3. Create Preset
    - Only calibrated sliders are rewritten from photo measurements.
-   - The main screen shows how many of the 12 controls are calibrated.
+   - The main screen shows how many of the 13 controls are calibrated.
    - Save to BDO Customization or download the file.
 
 FIRST-TIME CALIBRATION (required for photo matching)
 ----------------------------------------------------
-Open the Calibrate panel. For each control:
+Open the Calibrate panel. For each of the 13 controls:
 
   1. Load a base preset.
   2. In BDO creator, drag ONLY that one named slider to maximum and save.
@@ -37,6 +38,9 @@ Calibration is stored in:
   %LOCALAPPDATA%\FaceForge BDO\slidermap.json
 
 You can also place a slidermap.json next to the EXE to seed a fresh install.
+
+If you calibrated on 0.7.0: forehead_height is gone; add chin_width and
+nose_length. Other mappings still apply.
 
 OPTIONAL MERGE
 --------------

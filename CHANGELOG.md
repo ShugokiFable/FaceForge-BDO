@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.7.1 · 2026-08-07
+
+### Face measurement is now Skyrim FaceForge's, not a second implementation
+
+- `web/js/skyrim-face.js` is Skyrim FaceForge's own analysis pipeline, bundled
+  from `src/FaceForge.Web/src/domain` with esbuild (`web/vendor-src/`). FaceForge
+  BDO calls its `measureFace` instead of measuring landmarks itself.
+- That brings head-pose estimation, perspective/foreshortening correction,
+  mirror averaging, and per-measurement trust fading, so an imperfectly square-on
+  photo still measures sensibly. The previous hand-rolled version measured raw 2D
+  distances and degraded badly off-axis.
+- Sliders are now driven by deviation from `measurementBaselines` — what each
+  proportion reads on a real neutral head, measured from rendered heads in the
+  Skyrim project — instead of the invented [min, max] windows 0.7.0 first shipped.
+  A face at the baseline lands at 50; deviation is tanh-compressed by
+  `SLIDER_SPREAD` so a strong face approaches an end stop without pinning.
+- Controls went from 12 to 13 and now map onto real measurement keys:
+  forehead height is gone (the analyzer has no forehead measurement), chin width
+  and nose length are new, eye angle uses `eyeTilt`, lips use `lipFullness`.
+- Added regression tests for metric/baseline presence, neutral midpoint, mild
+  deviation, and clamp behaviour in `web/js/face-analysis.test.mjs`.
+
+**Note:** Existing `slidermap.json` entries for removed control IDs (for example
+`forehead_height`) are ignored; calibrate the new controls (`chin_width`,
+`nose_length`) once if you want the photo to drive them.
+
 ## 0.7.0 · 2026-08-06
 
 Rebuilt around a measured byte layout and a calibration the user can actually
@@ -29,16 +55,13 @@ supply, replacing the reference-library workflow that could never complete.
 
 - Create Face no longer needs a "profiled reference library". It measures the
   photo, then drives each **calibrated** slider from one facial proportion.
-- Added a fixed catalogue of 12 controls — exactly one per proportion the bundled
-  landmarker can measure. No control exists without a measurement behind it.
-- The analyzer now measures cheekbone width, forehead height, eyebrow height,
-  canthal tilt and lip thickness as well as the original seven ratios. Averaging
-  the two eyes' canthal tilt cancels head roll.
+- Added a fixed catalogue of 12 controls — exactly one per proportion the first
+  analyzer could measure. No control exists without a measurement behind it.
 - Uncalibrated sliders, the class, face type, hair, makeup, colours and body are
   copied from the starting preset byte for byte, so output is always a variant of
   a preset that already worked in game.
-- The main screen always states how many of the 12 sliders are calibrated. It
-  never implies more.
+- The main screen always states how many of the catalogue sliders are calibrated.
+  It never implies more.
 
 ### Calibration replaces the calibration wizard
 
