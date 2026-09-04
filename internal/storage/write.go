@@ -19,33 +19,52 @@ type SaveResult struct {
 }
 
 func SavePreset(directory, filename string, data []byte) (SaveResult, error) {
-	directory = filepath.Clean(strings.TrimSpace(directory))
+	directory = strings.TrimSpace(directory)
 	filename = strings.TrimSpace(filename)
 	if directory == "" || directory == "." {
 		return SaveResult{}, fmt.Errorf("customization directory is required")
 	}
-	if filename == "" || filename == "." || filename == ".." || filepath.Base(filename) != filename || strings.ContainsAny(filename, `/\\`) {
-		return SaveResult{}, fmt.Errorf("filename must be a plain file name without path separators")
+	if err := validFileName(filename); err != nil {
+		return SaveResult{}, err
 	}
 	parsed, err := preset.Parse(data)
 	if err != nil {
 		return SaveResult{}, fmt.Errorf("refusing to save invalid preset: %w", err)
 	}
-	if err := os.MkdirAll(directory, 0o755); err != nil {
+
+	absDir, err := mkdirAllWithin(directory, directory, 0o755)
+	if err != nil {
 		return SaveResult{}, fmt.Errorf("create customization directory: %w", err)
 	}
 
-	target := filepath.Join(directory, filename)
-	temp, err := os.CreateTemp(directory, ".faceforge-bdo-*.tmp")
+	target, err := confined(absDir, filename)
+	if err != nil {
+		return SaveResult{}, err
+	}
+	if !withinRoot(absDir, target) {
+		return SaveResult{}, errPathEscape
+	}
+	prefix := prefixOf(absDir, target)
+	sep := string(filepath.Separator)
+	if !strings.HasPrefix(target, prefix+sep) {
+		return SaveResult{}, errPathEscape
+	}
+
+	temp, err := createTempWithin(absDir, absDir, ".faceforge-bdo-*.tmp")
 	if err != nil {
 		return SaveResult{}, fmt.Errorf("create temporary preset: %w", err)
 	}
 	tempPath := temp.Name()
+	if _, err := confined(absDir, tempPath); err != nil {
+		_ = temp.Close()
+		_ = os.Remove(tempPath)
+		return SaveResult{}, err
+	}
 	cleanupTemp := true
 	defer func() {
 		_ = temp.Close()
 		if cleanupTemp {
-			_ = os.Remove(tempPath)
+			_ = removeWithin(absDir, tempPath)
 		}
 	}()
 	if err := temp.Chmod(0o600); err != nil {
@@ -62,26 +81,41 @@ func SavePreset(directory, filename string, data []byte) (SaveResult, error) {
 	}
 
 	backupPath := ""
-	if info, statErr := os.Stat(target); statErr == nil && !info.IsDir() {
-		backupDir := filepath.Join(directory, ".FaceForge BDO Backups")
-		if err := os.MkdirAll(backupDir, 0o755); err != nil {
-			return SaveResult{}, fmt.Errorf("create backup directory: %w", err)
+	info, statPath, statErr := statWithin(absDir, target)
+	if statErr == nil && !info.IsDir() {
+		backupDir, mkdirErr := mkdirAllWithin(absDir, filepath.Join(absDir, ".FaceForge BDO Backups"), 0o755)
+		if mkdirErr != nil {
+			return SaveResult{}, fmt.Errorf("create backup directory: %w", mkdirErr)
 		}
 		stamp := time.Now().UTC().Format("20060102-150405.000000000")
-		backupPath = filepath.Join(backupDir, fmt.Sprintf("%s.%s.bak", filename, stamp))
-		if err := copyFile(target, backupPath); err != nil {
+		backupName := fmt.Sprintf("%s.%s.bak", filename, stamp)
+		if err := validFileName(backupName); err != nil {
+			return SaveResult{}, err
+		}
+		backupPath, err = confined(backupDir, filepath.Join(backupDir, backupName))
+		if err != nil {
+			return SaveResult{}, err
+		}
+		if !withinRoot(absDir, backupPath) {
+			return SaveResult{}, errPathEscape
+		}
+		backupPrefix := prefixOf(absDir, backupPath)
+		if !strings.HasPrefix(backupPath, backupPrefix+sep) {
+			return SaveResult{}, errPathEscape
+		}
+		if err := copyFile(absDir, statPath, backupPath); err != nil {
 			return SaveResult{}, fmt.Errorf("backup existing preset: %w", err)
 		}
-		if err := os.Remove(target); err != nil {
+		if err := removeWithin(absDir, statPath); err != nil {
 			return SaveResult{}, fmt.Errorf("prepare target replacement: %w", err)
 		}
 	} else if statErr != nil && !os.IsNotExist(statErr) {
 		return SaveResult{}, fmt.Errorf("inspect target preset: %w", statErr)
 	}
 
-	if err := os.Rename(tempPath, target); err != nil {
+	if err := renameWithin(absDir, tempPath, target); err != nil {
 		if backupPath != "" {
-			_ = copyFile(backupPath, target)
+			_ = copyFile(absDir, backupPath, target)
 		}
 		return SaveResult{}, fmt.Errorf("install generated preset: %w", err)
 	}
@@ -95,13 +129,36 @@ func SavePreset(directory, filename string, data []byte) (SaveResult, error) {
 	}, nil
 }
 
-func copyFile(source, destination string) error {
-	input, err := os.Open(source)
+func copyFile(root, source, destination string) error {
+	src, err := confined(root, source)
+	if err != nil {
+		return err
+	}
+	dst, err := confined(root, destination)
+	if err != nil {
+		return err
+	}
+	absRoot, err := canonicalPath(root)
+	if err != nil {
+		return err
+	}
+	if !withinRoot(absRoot, src) || !withinRoot(absRoot, dst) {
+		return errPathEscape
+	}
+	sep := string(filepath.Separator)
+	if !strings.HasPrefix(src, prefixOf(absRoot, src)+sep) {
+		return errPathEscape
+	}
+	if !strings.HasPrefix(dst, prefixOf(absRoot, dst)+sep) {
+		return errPathEscape
+	}
+
+	input, err := openWithin(root, src)
 	if err != nil {
 		return err
 	}
 	defer input.Close()
-	output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	output, err := openFileWithin(root, dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -109,7 +166,7 @@ func copyFile(source, destination string) error {
 	defer func() {
 		_ = output.Close()
 		if !success {
-			_ = os.Remove(destination)
+			_ = removeWithin(root, dst)
 		}
 	}()
 	if _, err := io.Copy(output, input); err != nil {

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- Stop assigning DOM- and file-derived strings to `innerHTML`. The UI is built with element nodes and `textContent` / property assignment, so user-facing names, paths, toasts, and photo previews cannot be reinterpreted as HTML.
+- Confine wardrobe scan, read, and save paths to the configured customization directory. After `filepath.Abs` / `EvalSymlinks`, a separator-aware prefix check (Windows `EqualFold`) rejects `..`, absolute paths, drive-letter escapes, and sibling-directory prefix matches. Legitimate BDO filenames such as `Cute Lahn` still save and load as before.
+
 ## 0.7.1 · 2026-08-07
 
 ### Face measurement is now Skyrim FaceForge's, not a second implementation

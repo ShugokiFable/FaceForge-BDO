@@ -18,9 +18,6 @@ const state = {
   toasts: []
 };
 
-const escapeHTML = (value) => String(value ?? '')
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
 const percent = (value) => `${Math.round(Number(value ?? 0) * 100)}%`;
 
 let toastSequence = 0;
@@ -40,13 +37,83 @@ const calibrations = () => state.status?.calibrations ?? [];
 const calibrationFor = (id) => calibrations().find((entry) => entry.controlId === id) ?? null;
 const calibratedCount = () => calibrations().length;
 
+function el(tag, props, ...children) {
+  const node = document.createElement(tag);
+  if (props) {
+    for (const [key, value] of Object.entries(props)) {
+      if (value == null || value === false) continue;
+      switch (key) {
+        case 'class':
+        case 'className':
+          node.className = value;
+          break;
+        case 'text':
+          node.textContent = value;
+          break;
+        case 'src':
+          node.src = value;
+          break;
+        case 'title':
+          node.title = value;
+          break;
+        case 'value':
+          node.value = value;
+          break;
+        case 'disabled':
+          node.disabled = Boolean(value);
+          break;
+        case 'selected':
+          node.selected = Boolean(value);
+          break;
+        case 'checked':
+          node.checked = Boolean(value);
+          break;
+        case 'htmlFor':
+        case 'for':
+          node.htmlFor = value;
+          break;
+        case 'style':
+          if (typeof value === 'string') node.style.cssText = value;
+          else Object.assign(node.style, value);
+          break;
+        default:
+          node.setAttribute(key, String(value));
+      }
+    }
+  }
+  for (const child of children.flat(Infinity)) {
+    if (child == null || child === false) continue;
+    if (typeof child === 'string' || typeof child === 'number') {
+      node.append(document.createTextNode(String(child)));
+    } else {
+      node.append(child);
+    }
+  }
+  return node;
+}
+
+function bootScreen(message) {
+  root.className = 'boot-screen';
+  root.replaceChildren(
+    el('div', { className: 'boot-mark' }, 'FF'),
+    el('h1', {}, 'FaceForge BDO'),
+    el('p', {}, message)
+  );
+}
+
 // ---------------------------------------------------------------- rendering
 
 function toastStack() {
-  if (state.toasts.length === 0) return '';
-  return `<div class="toast-stack">${state.toasts
-    .map((item) => `<div class="toast ${item.type === 'error' ? 'error' : item.type === 'success' ? 'success' : ''}">${escapeHTML(item.message)}</div>`)
-    .join('')}</div>`;
+  if (state.toasts.length === 0) return null;
+  return el(
+    'div',
+    { className: 'toast-stack' },
+    state.toasts.map((item) => el(
+      'div',
+      { className: `toast${item.type === 'error' ? ' error' : item.type === 'success' ? ' success' : ''}` },
+      item.message
+    ))
+  );
 }
 
 function photoPanel() {
@@ -56,87 +123,100 @@ function photoPanel() {
   else if (photo?.error) badge = photo.error;
   else if (photo) badge = `${percent(photo.measurements.quality.symmetry)} symmetry`;
 
-  return `<div class="panel">
-    <div class="panel-header">
-      <div><div class="panel-title">1 · Target photo</div><div class="panel-subtitle">Front-facing, neutral expression, whole face visible</div></div>
-      ${photo ? '<button class="button ghost compact" data-action="clear-photo">Clear</button>' : ''}
-    </div>
-    <div class="panel-body stack compact-gap">
-      <label class="dropzone compact-drop">
-        <input type="file" accept="image/*" class="hidden" data-input="photo">
-        ${photo
-          ? `<div class="portrait-box"><img src="${photo.preview}" alt="Target face"><span class="portrait-badge">${escapeHTML(badge)}</span></div>`
-          : '<div class="portrait-empty"><strong>Choose a photo</strong><br>or drag one onto this box</div>'}
-      </label>
-      ${photo?.measurements ? measurementList(photo.measurements) : ''}
-    </div>
-  </div>`;
+  const dropContents = photo
+    ? el('div', { className: 'portrait-box' },
+      el('img', { src: photo.preview, alt: 'Target face' }),
+      el('span', { className: 'portrait-badge' }, badge))
+    : el('div', { className: 'portrait-empty' },
+      el('strong', {}, 'Choose a photo'),
+      el('br'),
+      'or drag one onto this box');
+
+  return el('div', { className: 'panel' },
+    el('div', { className: 'panel-header' },
+      el('div', {},
+        el('div', { className: 'panel-title' }, '1 · Target photo'),
+        el('div', { className: 'panel-subtitle' }, 'Front-facing, neutral expression, whole face visible')),
+      photo ? el('button', { className: 'button ghost compact', 'data-action': 'clear-photo' }, 'Clear') : null),
+    el('div', { className: 'panel-body stack compact-gap' },
+      el('label', { className: 'dropzone compact-drop' },
+        el('input', { type: 'file', accept: 'image/*', className: 'hidden', 'data-input': 'photo' }),
+        dropContents),
+      photo?.measurements ? measurementList(photo.measurements) : null));
 }
 
 function measurementList(measurements) {
   const rows = controls().map((control) => {
     const value = measurements.normalized[control.metric];
-    if (!Number.isFinite(value)) return '';
-    return `<div class="slider-row">
-      <span class="slider-label">${escapeHTML(control.label)}</span>
-      <div class="meter"><span style="width:${Math.round(value * 100)}%"></span></div>
-      <span class="slider-value mono">${Math.round(value * 100)}</span>
-    </div>`;
-  }).join('');
-  return `<details class="details-card"><summary>Measured proportions</summary><div class="stack compact-gap">${rows}</div></details>`;
+    if (!Number.isFinite(value)) return null;
+    return el('div', { className: 'slider-row' },
+      el('span', { className: 'slider-label' }, control.label),
+      el('div', { className: 'meter' }, el('span', { style: `width:${Math.round(value * 100)}%` })),
+      el('span', { className: 'slider-value mono' }, String(Math.round(value * 100))));
+  });
+  return el('details', { className: 'details-card' },
+    el('summary', {}, 'Measured proportions'),
+    el('div', { className: 'stack compact-gap' }, rows));
 }
 
 function presetOption(item) {
-  const selected = state.base?.path === item.path ? ' selected' : '';
+  const selected = state.base?.path === item.path;
   const who = item.characterName ? ` — ${item.characterName}` : '';
-  return `<option value="${escapeHTML(item.path)}"${selected}>${escapeHTML(item.name)}${escapeHTML(who)} (class ${item.classId})</option>`;
+  return el('option', { value: item.path, selected }, `${item.name}${who} (class ${item.classId})`);
 }
 
 function basePanel() {
   const { presets, loading, warnings } = state.library;
-  return `<div class="panel">
-    <div class="panel-header">
-      <div><div class="panel-title">2 · Starting preset</div><div class="panel-subtitle">A preset that already works in game. Its class, hair, makeup and colours are kept.</div></div>
-      <button class="button ghost compact" data-action="scan-library">${loading ? 'Scanning…' : 'Rescan'}</button>
-    </div>
-    <div class="panel-body stack compact-gap">
-      <div class="field">
-        <label>From your Black Desert folder</label>
-        <select class="input" data-input="base-select">
-          <option value="">${presets.length ? 'Choose a preset…' : 'No presets found in that folder'}</option>
-          ${presets.map(presetOption).join('')}
-        </select>
-      </div>
-      <label class="button ghost">
-        <input type="file" class="hidden" data-input="base-file">Or pick a preset file…
-      </label>
-      ${state.base
-        ? `<div class="file-card"><div class="file-glyph">BD</div><div class="file-meta"><strong>${escapeHTML(state.base.name)}</strong><span>class ${state.base.classId}${state.base.characterName ? ` · saved as ${escapeHTML(state.base.characterName)}` : ''}</span></div></div>`
-        : ''}
-      ${warnings.length ? `<details class="details-card"><summary>${warnings.length} file(s) skipped</summary><div class="stack compact-gap mono faint">${warnings.map((line) => escapeHTML(line)).join('<br>')}</div></details>` : ''}
-    </div>
-  </div>`;
+  return el('div', { className: 'panel' },
+    el('div', { className: 'panel-header' },
+      el('div', {},
+        el('div', { className: 'panel-title' }, '2 · Starting preset'),
+        el('div', { className: 'panel-subtitle' }, 'A preset that already works in game. Its class, hair, makeup and colours are kept.')),
+      el('button', { className: 'button ghost compact', 'data-action': 'scan-library' }, loading ? 'Scanning…' : 'Rescan')),
+    el('div', { className: 'panel-body stack compact-gap' },
+      el('div', { className: 'field' },
+        el('label', {}, 'From your Black Desert folder'),
+        el('select', { className: 'input', 'data-input': 'base-select' },
+          el('option', { value: '' }, presets.length ? 'Choose a preset…' : 'No presets found in that folder'),
+          presets.map(presetOption))),
+      el('label', { className: 'button ghost' },
+        el('input', { type: 'file', className: 'hidden', 'data-input': 'base-file' }),
+        'Or pick a preset file…'),
+      state.base
+        ? el('div', { className: 'file-card' },
+          el('div', { className: 'file-glyph' }, 'BD'),
+          el('div', { className: 'file-meta' },
+            el('strong', {}, state.base.name),
+            el('span', {}, `class ${state.base.classId}${state.base.characterName ? ` · saved as ${state.base.characterName}` : ''}`)))
+        : null,
+      warnings.length
+        ? el('details', { className: 'details-card' },
+          el('summary', {}, `${warnings.length} file(s) skipped`),
+          el('div', { className: 'stack compact-gap mono faint' },
+            warnings.flatMap((line, index) => (index ? [el('br'), line] : [line]))))
+        : null));
 }
 
-// calibrationBanner is the app's honesty surface: it must always say exactly how
-// many sliders FaceForge can actually drive, never imply more.
 function calibrationBanner() {
   const done = calibratedCount();
   const total = controls().length;
   if (done === 0) {
-    return `<div class="callout warning">
-      <strong>Photo matching needs calibration first.</strong> None of the ${total} sliders are mapped yet, so FaceForge does not know which byte in a BDO preset is the nose width.
-      Teach it once — about five minutes in the character creator — and it stays mapped.
-      <div class="row-actions"><button class="button primary" data-action="open-calibrate">Calibrate sliders</button></div>
-    </div>`;
+    return el('div', { className: 'callout warning' },
+      el('strong', {}, 'Photo matching needs calibration first. '),
+      `None of the ${total} sliders are mapped yet, so FaceForge does not know which byte in a BDO preset is the nose width. Teach it once — about five minutes in the character creator — and it stays mapped.`,
+      el('div', { className: 'row-actions' },
+        el('button', { className: 'button primary', 'data-action': 'open-calibrate' }, 'Calibrate sliders')));
   }
   if (done < total) {
-    return `<div class="callout">
-      <strong>${done} of ${total} sliders calibrated.</strong> The photo drives those ${done}; the rest are copied from the starting preset untouched.
-      <div class="row-actions"><button class="button compact" data-action="open-calibrate">Calibrate the rest</button></div>
-    </div>`;
+    return el('div', { className: 'callout' },
+      el('strong', {}, `${done} of ${total} sliders calibrated. `),
+      `The photo drives those ${done}; the rest are copied from the starting preset untouched.`,
+      el('div', { className: 'row-actions' },
+        el('button', { className: 'button compact', 'data-action': 'open-calibrate' }, 'Calibrate the rest')));
   }
-  return `<div class="callout success"><strong>All ${total} sliders calibrated.</strong> The photo drives every mapped facial proportion.</div>`;
+  return el('div', { className: 'callout success' },
+    el('strong', {}, `All ${total} sliders calibrated. `),
+    'The photo drives every mapped facial proportion.');
 }
 
 function actionPanel() {
@@ -146,157 +226,186 @@ function actionPanel() {
   if (!state.base) reasons.push('a starting preset');
   if (calibratedCount() === 0) reasons.push('at least one calibrated slider');
 
-  return `<div class="panel action-panel">
-    <div class="panel-body stack compact-gap">
-      <div class="field">
-        <label>Match strength — how far to move toward the photo (${state.strength}%)</label>
-        <input type="range" class="slider" min="0" max="100" value="${state.strength}" data-input="strength">
-        <div class="help">100% lands exactly on the measured proportions. 60–80% usually looks more like a BDO character.</div>
-      </div>
-      <div class="field">
-        <label>Save as</label>
-        <input class="input" data-input="output-name" value="${escapeHTML(state.outputName)}">
-      </div>
-      <button class="button primary large-action" data-action="generate"${ready ? '' : ' disabled'}>Create Preset</button>
-      ${ready ? '' : `<div class="help">Still needs ${escapeHTML(reasons.join(', '))}.</div>`}
-    </div>
-  </div>`;
+  return el('div', { className: 'panel action-panel' },
+    el('div', { className: 'panel-body stack compact-gap' },
+      el('div', { className: 'field' },
+        el('label', {}, `Match strength — how far to move toward the photo (${state.strength}%)`),
+        el('input', { type: 'range', className: 'slider', min: '0', max: '100', value: String(state.strength), 'data-input': 'strength' }),
+        el('div', { className: 'help' }, '100% lands exactly on the measured proportions. 60–80% usually looks more like a BDO character.')),
+      el('div', { className: 'field' },
+        el('label', {}, 'Save as'),
+        el('input', { className: 'input', 'data-input': 'output-name', value: state.outputName })),
+      el('button', { className: 'button primary large-action', 'data-action': 'generate', disabled: !ready }, 'Create Preset'),
+      ready ? null : el('div', { className: 'help' }, `Still needs ${reasons.join(', ')}.`)));
 }
 
 function resultPanel() {
   const result = state.result;
   if (!result) {
-    return `<div class="panel"><div class="panel-header"><div><div class="panel-title">Result</div><div class="panel-subtitle">Appears here once you create a preset</div></div></div>
-      <div class="panel-body"><div class="empty-state">Add a photo and a starting preset, then click <strong>Create Preset</strong>.</div></div></div>`;
+    return el('div', { className: 'panel' },
+      el('div', { className: 'panel-header' },
+        el('div', {},
+          el('div', { className: 'panel-title' }, 'Result'),
+          el('div', { className: 'panel-subtitle' }, 'Appears here once you create a preset'))),
+      el('div', { className: 'panel-body' },
+        el('div', { className: 'empty-state' },
+          'Add a photo and a starting preset, then click ',
+          el('strong', {}, 'Create Preset'),
+          '.')));
   }
   const applied = result.applied ?? [];
   const skipped = result.skipped ?? [];
-  const rows = applied.map((item) => `<div class="data-row">
-      <div class="data-main"><strong>${escapeHTML(item.label)}</strong><span>byte ${item.offset} · photo said ${Math.round(item.metricValue * 100)} · slider ${item.from} → ${item.to}</span></div>
-    </div>`).join('');
+  const rows = applied.map((item) => el('div', { className: 'data-row' },
+    el('div', { className: 'data-main' },
+      el('strong', {}, item.label),
+      el('span', {}, `byte ${item.offset} · photo said ${Math.round(item.metricValue * 100)} · slider ${item.from} → ${item.to}`))));
 
-  return `<div class="panel">
-    <div class="panel-header">
-      <div><div class="panel-title">Result</div><div class="panel-subtitle">Validated version 20 preset · ${applied.length} slider(s) driven from the photo</div></div>
-      <div class="inline">
-        <button class="button primary" data-action="save-result">Save into Black Desert</button>
-        <button class="button" data-action="download-result">Download</button>
-      </div>
-    </div>
-    <div class="panel-body stack">
-      ${(result.warnings ?? []).map((line) => `<div class="callout warning">${escapeHTML(line)}</div>`).join('')}
-      <div class="data-list compact-list">${rows}</div>
-      ${skipped.length ? `<details class="details-card"><summary>${skipped.length} slider(s) left untouched</summary><div class="data-list compact-list">${skipped
-        .map((item) => `<div class="data-row"><div class="data-main"><strong>${escapeHTML(item.label)}</strong><span>${escapeHTML(item.reason)}</span></div></div>`)
-        .join('')}</div></details>` : ''}
-      <div class="help">In Black Desert: character creation → Load File → pick <strong>${escapeHTML(safeFilename(state.outputName))}</strong>, then fine-tune by hand.</div>
-    </div>
-  </div>`;
+  return el('div', { className: 'panel' },
+    el('div', { className: 'panel-header' },
+      el('div', {},
+        el('div', { className: 'panel-title' }, 'Result'),
+        el('div', { className: 'panel-subtitle' }, `Validated version 20 preset · ${applied.length} slider(s) driven from the photo`)),
+      el('div', { className: 'inline' },
+        el('button', { className: 'button primary', 'data-action': 'save-result' }, 'Save into Black Desert'),
+        el('button', { className: 'button', 'data-action': 'download-result' }, 'Download'))),
+    el('div', { className: 'panel-body stack' },
+      (result.warnings ?? []).map((line) => el('div', { className: 'callout warning' }, line)),
+      el('div', { className: 'data-list compact-list' }, rows),
+      skipped.length
+        ? el('details', { className: 'details-card' },
+          el('summary', {}, `${skipped.length} slider(s) left untouched`),
+          el('div', { className: 'data-list compact-list' },
+            skipped.map((item) => el('div', { className: 'data-row' },
+              el('div', { className: 'data-main' },
+                el('strong', {}, item.label),
+                el('span', {}, item.reason))))))
+        : null,
+      el('div', { className: 'help' },
+        'In Black Desert: character creation → Load File → pick ',
+        el('strong', {}, safeFilename(state.outputName)),
+        ', then fine-tune by hand.')));
 }
 
 function calibratePanel() {
   if (state.panel !== 'calibrate') {
-    return `<button class="button ghost" data-action="open-calibrate">Calibrate sliders (${calibratedCount()} of ${controls().length} done)</button>`;
+    return el('button', { className: 'button ghost', 'data-action': 'open-calibrate' },
+      `Calibrate sliders (${calibratedCount()} of ${controls().length} done)`);
   }
   const rows = controls().map((control) => {
     const calibration = calibrationFor(control.id);
     const busy = state.calibrate.busy === control.id;
-    return `<div class="data-row">
-      <div class="data-main">
-        <strong>${escapeHTML(control.label)}</strong>
-        <span>${escapeHTML(control.section)} · ${escapeHTML(control.instruction)}</span>
-        <span class="${calibration ? 'mono' : 'warning-text'}">${calibration
-          ? `mapped to byte ${calibration.offset} (class ${calibration.classId})`
-          : 'not calibrated'}</span>
-      </div>
-      <div class="row-actions wrap">
-        <label class="button compact${state.calibrate.base ? '' : ' ghost'}">
-          <input type="file" class="hidden" data-learn="${escapeHTML(control.id)}"${state.calibrate.base && !busy ? '' : ' disabled'}>
-          ${busy ? 'Reading…' : calibration ? 'Redo' : 'Pick maxed save'}
-        </label>
-        ${calibration ? `<button class="button ghost compact" data-action="forget" data-control="${escapeHTML(control.id)}">Forget</button>` : ''}
-      </div>
-    </div>`;
-  }).join('');
+    return el('div', { className: 'data-row' },
+      el('div', { className: 'data-main' },
+        el('strong', {}, control.label),
+        el('span', {}, `${control.section} · ${control.instruction}`),
+        el('span', { className: calibration ? 'mono' : 'warning-text' },
+          calibration ? `mapped to byte ${calibration.offset} (class ${calibration.classId})` : 'not calibrated')),
+      el('div', { className: 'row-actions wrap' },
+        el('label', { className: `button compact${state.calibrate.base ? '' : ' ghost'}` },
+          el('input', {
+            type: 'file',
+            className: 'hidden',
+            'data-learn': control.id,
+            disabled: !(state.calibrate.base && !busy)
+          }),
+          busy ? 'Reading…' : calibration ? 'Redo' : 'Pick maxed save'),
+        calibration
+          ? el('button', { className: 'button ghost compact', 'data-action': 'forget', 'data-control': control.id }, 'Forget')
+          : null));
+  });
 
-  return `<div class="panel">
-    <div class="panel-header">
-      <div><div class="panel-title">Calibrate sliders</div><div class="panel-subtitle">Teach FaceForge which byte each slider lives in. Once per install.</div></div>
-      <button class="button ghost compact" data-action="close-panel">Close</button>
-    </div>
-    <div class="panel-body stack">
-      <div class="step-list compact">
-        <div class="step-item"><div class="step-number">1</div><div><strong>Save a base preset.</strong> In BDO's character creator, save your character as <span class="mono">cal base</span> without changing anything.</div></div>
-        <div class="step-item"><div class="step-number">2</div><div><strong>Load that base preset below.</strong></div></div>
-        <div class="step-item"><div class="step-number">3</div><div><strong>For one slider:</strong> reload <span class="mono">cal base</span> in game, drag only that slider to its maximum, save under a new name, then pick that file here.</div></div>
-        <div class="step-item"><div class="step-number">4</div><div><strong>Repeat</strong> for each slider you care about. Always start from the base again so only one slider differs.</div></div>
-      </div>
-      <div class="field">
-        <label>Base preset (unchanged save)</label>
-        <label class="button${state.calibrate.base ? ' ghost' : ' primary'}">
-          <input type="file" class="hidden" data-input="calibrate-base">
-          ${state.calibrate.base ? `Loaded: ${escapeHTML(state.calibrate.base.name)} — change` : 'Choose the base preset file…'}
-        </label>
-      </div>
-      ${state.calibrate.error ? `<div class="callout danger">${escapeHTML(state.calibrate.error)}</div>` : ''}
-      ${state.calibrate.lastLearned ? `<div class="callout success">${escapeHTML(state.calibrate.lastLearned)}</div>` : ''}
-      ${state.calibrate.base ? '' : '<div class="callout">Load the base preset first — every calibration is a diff against it.</div>'}
-      <div class="data-list">${rows}</div>
-    </div>
-  </div>`;
+  return el('div', { className: 'panel' },
+    el('div', { className: 'panel-header' },
+      el('div', {},
+        el('div', { className: 'panel-title' }, 'Calibrate sliders'),
+        el('div', { className: 'panel-subtitle' }, 'Teach FaceForge which byte each slider lives in. Once per install.')),
+      el('button', { className: 'button ghost compact', 'data-action': 'close-panel' }, 'Close')),
+    el('div', { className: 'panel-body stack' },
+      el('div', { className: 'step-list compact' },
+        el('div', { className: 'step-item' },
+          el('div', { className: 'step-number' }, '1'),
+          el('div', {}, el('strong', {}, 'Save a base preset. '), 'In BDO\'s character creator, save your character as ', el('span', { className: 'mono' }, 'cal base'), ' without changing anything.')),
+        el('div', { className: 'step-item' },
+          el('div', { className: 'step-number' }, '2'),
+          el('div', {}, el('strong', {}, 'Load that base preset below.'))),
+        el('div', { className: 'step-item' },
+          el('div', { className: 'step-number' }, '3'),
+          el('div', {}, el('strong', {}, 'For one slider: '), 'reload ', el('span', { className: 'mono' }, 'cal base'), ' in game, drag only that slider to its maximum, save under a new name, then pick that file here.')),
+        el('div', { className: 'step-item' },
+          el('div', { className: 'step-number' }, '4'),
+          el('div', {}, el('strong', {}, 'Repeat'), ' for each slider you care about. Always start from the base again so only one slider differs.'))),
+      el('div', { className: 'field' },
+        el('label', {}, 'Base preset (unchanged save)'),
+        el('label', { className: `button${state.calibrate.base ? ' ghost' : ' primary'}` },
+          el('input', { type: 'file', className: 'hidden', 'data-input': 'calibrate-base' }),
+          state.calibrate.base ? `Loaded: ${state.calibrate.base.name} — change` : 'Choose the base preset file…')),
+      state.calibrate.error ? el('div', { className: 'callout danger' }, state.calibrate.error) : null,
+      state.calibrate.lastLearned ? el('div', { className: 'callout success' }, state.calibrate.lastLearned) : null,
+      state.calibrate.base ? null : el('div', { className: 'callout' }, 'Load the base preset first — every calibration is a diff against it.'),
+      el('div', { className: 'data-list' }, rows)));
 }
 
 function mergePanel() {
   if (state.panel !== 'merge') {
-    return '<button class="button ghost" data-action="open-merge">Merge two presets</button>';
+    return el('button', { className: 'button ghost', 'data-action': 'open-merge' }, 'Merge two presets');
   }
   const result = state.merge.result;
-  return `<div class="panel">
-    <div class="panel-header">
-      <div><div class="panel-title">Merge two presets</div><div class="panel-subtitle">Mixes only the face and body sliders. Needs no calibration.</div></div>
-      <button class="button ghost compact" data-action="close-panel">Close</button>
-    </div>
-    <div class="panel-body stack compact-gap">
-      <div class="help">Base is the starting preset chosen above${state.base ? `: <strong>${escapeHTML(state.base.name)}</strong>` : ' — pick one first.'}</div>
-      <label class="button ghost">
-        <input type="file" class="hidden" data-input="donor-file">
-        ${state.merge.donor ? `Donor: ${escapeHTML(state.merge.donor.name)} — change` : 'Choose the donor preset file…'}
-      </label>
-      <div class="field">
-        <label>Donor weight (${state.merge.weight}%)</label>
-        <input type="range" class="slider" min="0" max="100" value="${state.merge.weight}" data-input="merge-weight">
-      </div>
-      <button class="button primary" data-action="merge"${state.base && state.merge.donor ? '' : ' disabled'}>Merge</button>
-      ${result ? `<div class="callout success">${result.changedBytes} slider byte(s) changed.</div>
-        <div class="inline"><button class="button primary" data-action="save-merge">Save into Black Desert</button><button class="button" data-action="download-merge">Download</button></div>` : ''}
-    </div>
-  </div>`;
+  return el('div', { className: 'panel' },
+    el('div', { className: 'panel-header' },
+      el('div', {},
+        el('div', { className: 'panel-title' }, 'Merge two presets'),
+        el('div', { className: 'panel-subtitle' }, 'Mixes only the face and body sliders. Needs no calibration.')),
+      el('button', { className: 'button ghost compact', 'data-action': 'close-panel' }, 'Close')),
+    el('div', { className: 'panel-body stack compact-gap' },
+      el('div', { className: 'help' },
+        state.base
+          ? ['Base is the starting preset chosen above: ', el('strong', {}, state.base.name)]
+          : 'Base is the starting preset chosen above — pick one first.'),
+      el('label', { className: 'button ghost' },
+        el('input', { type: 'file', className: 'hidden', 'data-input': 'donor-file' }),
+        state.merge.donor ? `Donor: ${state.merge.donor.name} — change` : 'Choose the donor preset file…'),
+      el('div', { className: 'field' },
+        el('label', {}, `Donor weight (${state.merge.weight}%)`),
+        el('input', { type: 'range', className: 'slider', min: '0', max: '100', value: String(state.merge.weight), 'data-input': 'merge-weight' })),
+      el('button', { className: 'button primary', 'data-action': 'merge', disabled: !(state.base && state.merge.donor) }, 'Merge'),
+      result
+        ? [
+          el('div', { className: 'callout success' }, `${result.changedBytes} slider byte(s) changed.`),
+          el('div', { className: 'inline' },
+            el('button', { className: 'button primary', 'data-action': 'save-merge' }, 'Save into Black Desert'),
+            el('button', { className: 'button', 'data-action': 'download-merge' }, 'Download'))
+        ]
+        : null));
 }
 
 function render() {
   if (!state.status) {
-    root.className = 'boot-screen';
-    root.innerHTML = '<div class="boot-mark">FF</div><h1>FaceForge BDO</h1><p>Opening the local preset forge…</p>';
+    bootScreen('Opening the local preset forge…');
     return;
   }
   root.className = 'app-shell';
-  root.innerHTML = `
-    <header class="topbar">
-      <div class="brand"><div class="brand-mark">FF</div><div class="brand-copy"><strong>FaceForge BDO</strong><span>Photo to Black Desert preset, offline</span></div></div>
-      <div class="topbar-spacer"></div>
-      <div class="status-chip" title="${escapeHTML(state.status.customizationDir)}"><span class="status-dot"></span>${escapeHTML(state.status.customizationDir || 'Local service connected')}</div>
-      <button class="button ghost compact" data-action="shutdown">Exit</button>
-    </header>
-    <main class="main">
-      <section class="view compact-view">
-        ${calibrationBanner()}
-        <div class="grid two">${photoPanel()}${basePanel()}</div>
-        ${actionPanel()}
-        ${resultPanel()}
-        <div class="stack compact-gap">${calibratePanel()}${mergePanel()}</div>
-      </section>
-    </main>
-    ${toastStack()}`;
+  const dir = state.status.customizationDir || 'Local service connected';
+  root.replaceChildren(
+    el('header', { className: 'topbar' },
+      el('div', { className: 'brand' },
+        el('div', { className: 'brand-mark' }, 'FF'),
+        el('div', { className: 'brand-copy' },
+          el('strong', {}, 'FaceForge BDO'),
+          el('span', {}, 'Photo to Black Desert preset, offline'))),
+      el('div', { className: 'topbar-spacer' }),
+      el('div', { className: 'status-chip', title: dir },
+        el('span', { className: 'status-dot' }),
+        dir),
+      el('button', { className: 'button ghost compact', 'data-action': 'shutdown' }, 'Exit')),
+    el('main', { className: 'main' },
+      el('section', { className: 'view compact-view' },
+        calibrationBanner(),
+        el('div', { className: 'grid two' }, photoPanel(), basePanel()),
+        actionPanel(),
+        resultPanel(),
+        el('div', { className: 'stack compact-gap' }, calibratePanel(), mergePanel()))),
+    toastStack()
+  );
 }
 
 // ------------------------------------------------------------------ actions
@@ -529,8 +638,7 @@ root.addEventListener('drop', async (event) => {
 
 async function start() {
   if (!hasToken()) {
-    root.className = 'boot-screen';
-    root.innerHTML = '<div class="boot-mark">FF</div><h1>FaceForge BDO</h1><p>Launch FaceForge BDO from its EXE so it can hand this window its session token.</p>';
+    bootScreen('Launch FaceForge BDO from its EXE so it can hand this window its session token.');
     return;
   }
   try {
@@ -538,8 +646,7 @@ async function start() {
     render();
     await scanLibrary();
   } catch (error) {
-    root.className = 'boot-screen';
-    root.innerHTML = `<div class="boot-mark">FF</div><h1>FaceForge BDO</h1><p>${escapeHTML(error.message)}</p>`;
+    bootScreen(error.message);
   }
 }
 

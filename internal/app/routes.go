@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -251,12 +250,38 @@ func (s *server) sliderMap(writer http.ResponseWriter, request *http.Request) {
 	}
 }
 
-func (s *server) scanFolder(writer http.ResponseWriter, request *http.Request) {
-	directory := strings.TrimSpace(request.URL.Query().Get("path"))
-	if directory == "" {
-		directory = s.config.CustomizationDir
+func heldInRoot(root, candidate string) (string, error) {
+	confined, err := storage.ResolveInside(root, candidate)
+	if err != nil {
+		return "", err
 	}
-	result, err := storage.ScanPresets(directory)
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	absRoot = filepath.Clean(absRoot)
+	prefix := absRoot
+	if len(confined) >= len(absRoot) && strings.EqualFold(confined[:len(absRoot)], absRoot) {
+		prefix = confined[:len(absRoot)]
+	}
+	if !strings.HasPrefix(confined, prefix) {
+		return "", fmt.Errorf("path escapes allowed directory")
+	}
+	return confined, nil
+}
+
+func (s *server) scanFolder(writer http.ResponseWriter, request *http.Request) {
+	root := s.config.CustomizationDir
+	directory := root
+	if requested := strings.TrimSpace(request.URL.Query().Get("path")); requested != "" {
+		confined, err := heldInRoot(root, requested)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, err.Error())
+			return
+		}
+		directory = confined
+	}
+	result, err := storage.ScanPresetsInRoot(root, directory)
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, err.Error())
 		return
@@ -271,8 +296,12 @@ func (s *server) readPreset(writer http.ResponseWriter, request *http.Request) {
 	if !decodeJSON(writer, request, &input) {
 		return
 	}
-	path := filepath.Clean(strings.TrimSpace(input.Path))
-	data, err := os.ReadFile(path)
+	resolved, err := heldInRoot(s.config.CustomizationDir, input.Path)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "Read preset: "+err.Error())
+		return
+	}
+	data, err := storage.ReadFileInside(s.config.CustomizationDir, resolved)
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, "Read preset: "+err.Error())
 		return
@@ -283,8 +312,8 @@ func (s *server) readPreset(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	payload := presetPayload(parsed)
-	payload["name"] = filepath.Base(path)
-	payload["path"] = path
+	payload["name"] = filepath.Base(resolved)
+	payload["path"] = resolved
 	writeJSON(writer, http.StatusOK, payload)
 }
 
@@ -302,9 +331,14 @@ func (s *server) savePreset(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
-	directory := strings.TrimSpace(input.Directory)
-	if directory == "" {
-		directory = s.config.CustomizationDir
+	directory := s.config.CustomizationDir
+	if requested := strings.TrimSpace(input.Directory); requested != "" {
+		confined, confineErr := heldInRoot(directory, requested)
+		if confineErr != nil {
+			writeError(writer, http.StatusBadRequest, confineErr.Error())
+			return
+		}
+		directory = confined
 	}
 	result, err := storage.SavePreset(directory, input.Filename, raw)
 	if err != nil {

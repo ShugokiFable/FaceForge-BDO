@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -286,6 +287,66 @@ func TestSaveRejectsPathTraversal(t *testing.T) {
 		"filename": filepath.Join("..", "escaped"),
 		"data":     encodedFixture(t, "Cute Lahn"),
 	})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestSaveRejectsDirectoryEscape(t *testing.T) {
+	outside := t.TempDir()
+	response := request(t, testHandler(t), http.MethodPost, "/api/save", "secret", map[string]any{
+		"directory": outside,
+		"filename":  "Stolen",
+		"data":      encodedFixture(t, "Cute Lahn"),
+	})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(outside, "Stolen")); !os.IsNotExist(err) {
+		t.Fatal("save wrote outside the customization directory")
+	}
+}
+
+func TestReadPresetAllowsFileInsideRootAndRejectsEscape(t *testing.T) {
+	directory := t.TempDir()
+	name := "Cute Lahn"
+	if err := os.WriteFile(filepath.Join(directory, name), appFixture(t, name), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(Config{
+		Token:            "secret",
+		CustomizationDir: directory,
+		SliderMapPath:    filepath.Join(t.TempDir(), "slidermap.json"),
+	})
+
+	ok := request(t, handler, http.MethodPost, "/api/folder/read", "secret", map[string]any{
+		"path": filepath.Join(directory, name),
+	})
+	if ok.Code != http.StatusOK {
+		t.Fatalf("in-root read = %d; body=%s", ok.Code, ok.Body.String())
+	}
+
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, name), appFixture(t, name), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	escaped := request(t, handler, http.MethodPost, "/api/folder/read", "secret", map[string]any{
+		"path": filepath.Join(outside, name),
+	})
+	if escaped.Code != http.StatusBadRequest {
+		t.Fatalf("escaped read = %d, want 400; body=%s", escaped.Code, escaped.Body.String())
+	}
+}
+
+func TestScanRejectsPathOutsideRoot(t *testing.T) {
+	directory := t.TempDir()
+	handler := NewHandler(Config{
+		Token:            "secret",
+		CustomizationDir: directory,
+		SliderMapPath:    filepath.Join(t.TempDir(), "slidermap.json"),
+	})
+	outside := t.TempDir()
+	response := request(t, handler, http.MethodGet, "/api/folder/scan?path="+url.QueryEscape(outside), "secret", nil)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
 	}

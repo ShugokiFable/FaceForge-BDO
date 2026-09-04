@@ -57,25 +57,56 @@ func DiscoverCustomizationDir() (string, error) {
 }
 
 func ScanPresets(directory string) (ScanResult, error) {
-	directory = filepath.Clean(strings.TrimSpace(directory))
-	if directory == "." || directory == "" {
+	return ScanPresetsInRoot(directory, directory)
+}
+
+// ScanPresetsInRoot lists presets in directory after proving it stays inside root.
+func ScanPresetsInRoot(root, directory string) (ScanResult, error) {
+	root = strings.TrimSpace(root)
+	directory = strings.TrimSpace(directory)
+	if root == "" || root == "." {
 		return ScanResult{}, fmt.Errorf("customization directory is required")
 	}
-	entries, err := os.ReadDir(directory)
+	if directory == "" || directory == "." {
+		directory = root
+	}
+
+	entries, absDir, err := readDirWithin(root, directory)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return ScanResult{Directory: directory}, nil
+			confinedDir, resolveErr := confined(root, directory)
+			if resolveErr != nil {
+				return ScanResult{}, resolveErr
+			}
+			return ScanResult{Directory: confinedDir}, nil
 		}
 		return ScanResult{}, fmt.Errorf("scan customization directory: %w", err)
 	}
 
-	result := ScanResult{Directory: directory}
+	result := ScanResult{Directory: absDir}
+	sep := string(filepath.Separator)
 	for _, entry := range entries {
 		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		path := filepath.Join(directory, entry.Name())
-		data, readErr := os.ReadFile(path)
+		if err := validFileName(entry.Name()); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: skipped unsafe name", entry.Name()))
+			continue
+		}
+		path, pathErr := confined(absDir, entry.Name())
+		if pathErr != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %v", entry.Name(), pathErr))
+			continue
+		}
+		if !withinRoot(absDir, path) {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %v", entry.Name(), errPathEscape))
+			continue
+		}
+		if !strings.HasPrefix(path, prefixOf(absDir, path)+sep) {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %v", entry.Name(), errPathEscape))
+			continue
+		}
+		data, readErr := readFileWithin(absDir, path)
 		if readErr != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %v", entry.Name(), readErr))
 			continue

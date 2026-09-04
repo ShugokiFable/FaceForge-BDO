@@ -96,7 +96,33 @@ func TestSavePresetRejectsTraversalAndInvalidData(t *testing.T) {
 	if _, err := SavePreset(dir, "../escape", fixture(t, "Cute Lahn")); err == nil {
 		t.Fatal("SavePreset unexpectedly accepted path traversal")
 	}
+	if _, err := SavePreset(dir, filepath.Join("..", "escaped"), fixture(t, "Cute Lahn")); err == nil {
+		t.Fatal("SavePreset unexpectedly accepted joined traversal")
+	}
+	if _, err := SavePreset(dir, filepath.Join(dir, "..", "escaped"), fixture(t, "Cute Lahn")); err == nil {
+		t.Fatal("SavePreset unexpectedly accepted an absolute escape")
+	}
 	if _, err := SavePreset(dir, "CustomizationData", make([]byte, preset.ExpectedSizeV20)); err == nil {
 		t.Fatal("SavePreset unexpectedly accepted unsupported version data")
+	}
+}
+
+func TestSavePresetWritesPlainBDOFilename(t *testing.T) {
+	dir := t.TempDir()
+	result, err := SavePreset(dir, "Cute Lahn", fixture(t, "Cute Lahn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "Cute Lahn")
+	got, err := filepath.Abs(result.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAbs, err := filepath.Abs(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != wantAbs {
+		t.Fatalf("path = %q, want %q", got, wantAbs)
 	}
 }
